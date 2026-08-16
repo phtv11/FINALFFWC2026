@@ -1,66 +1,49 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRightLeft, CheckCircle2, Sparkles, Wallet } from "lucide-react";
-import { useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useRef, useState } from "react";
+import { ArrowLeft, Loader2, Sparkles, Wallet, ShoppingCart } from "lucide-react";
+import { useNavigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
-import { getUserRTBs, transferRTB } from "../services/contract";
+import {
+    getUserRTBs,
+    createMarketplaceListing,
+    getUSDCBalance,
+    buyFromMarketplace,
+    transferUSDC,
+    getMarketplaceListings
+} from "../services/contract";
 
-interface MarketplaceLocationState {
-    tokenId?: number;
-    matchId?: string;
-    owner?: string;
-}
+const PAYMENT_WALLET = import.meta.env.VITE_PAYMENT_WALLET || "0x8c75a2eC18f3B5Dcca94C8aF239AcdB01109dA64";
 
-interface MarketplaceListing {
-    id: string;
+interface Listing {
     tokenId: number;
-    matchId: string;
-    owner: string;
-    sellerAddress: string;
+    seller: string;
     price: number;
-    fee: number;
-    sellerReceives: number;
-    status: "active" | "pending" | "sold";
-    buyerAddress?: string;
-    createdAt: string;
+    active: boolean;
+    matchId?: string;
 }
-
-const STORAGE_KEY = "marketplace-listings";
 
 export default function Marketplace() {
     const navigate = useNavigate();
-    const location = useLocation();
     const { address, connected } = useWallet();
 
-    const state = (location.state as MarketplaceLocationState | null) ?? {};
-    const defaultTokenId = state.tokenId ?? 1;
-    const defaultMatchId = state.matchId ?? "MATCH-001";
-    const defaultOwner = state.owner ?? "0x000...";
-
-    const [tokenId, setTokenId] = useState(defaultTokenId);
-    const [matchId, setMatchId] = useState(defaultMatchId);
-    const [price, setPrice] = useState(50);
-    const [listings, setListings] = useState<MarketplaceListing[]>([]);
+    // Seller state
+    const [selectedRTB, setSelectedRTB] = useState<number | null>(null);
+    const [listingPrice, setListingPrice] = useState(50);
     const [ownedRTBs, setOwnedRTBs] = useState<Array<{ tokenId: number; matchId: string }>>([]);
+
+    // Buyer state
+    const [listings, setListings] = useState<Listing[]>([]);
+    const [selectedBuyListing, setSelectedBuyListing] = useState<Listing | null>(null);
+    const [usdcBalance, setUsdcBalance] = useState(0);
+
+    // UI state
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
+
     const previousWalletRef = useRef<string | null>(null);
     const previousConnectedRef = useRef(false);
     const hasInitializedWalletRef = useRef(false);
 
-    useEffect(() => {
-        try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-                const parsed = JSON.parse(raw) as MarketplaceListing[];
-                setListings(parsed);
-            } else {
-                setListings([]);
-            }
-        } catch {
-            setListings([]);
-        }
-    }, []);
-
+    // Initialize wallet
     useEffect(() => {
         if (!hasInitializedWalletRef.current) {
             hasInitializedWalletRef.current = true;
@@ -70,30 +53,24 @@ export default function Marketplace() {
         }
 
         const walletChanged = previousWalletRef.current !== address || previousConnectedRef.current !== connected;
-        if (!walletChanged) {
-            previousWalletRef.current = address ?? null;
-            previousConnectedRef.current = connected;
-            return;
-        }
+        if (!walletChanged) return;
 
         setOwnedRTBs([]);
-        setTokenId(1);
-        setMatchId("MATCH-001");
-        setPrice(50);
+        setUsdcBalance(0);
         setMessage("");
+        setSelectedRTB(null);
+        setSelectedBuyListing(null);
 
         previousWalletRef.current = address ?? null;
         previousConnectedRef.current = connected;
     }, [address, connected]);
 
+    // Load seller's RTBs, buyer's USDC balance, and marketplace listings
     useEffect(() => {
-        async function loadOwnedRTBs() {
+        async function loadData() {
             if (!connected || !address) {
                 setOwnedRTBs([]);
-                setTokenId(1);
-                setMatchId("MATCH-001");
-                setPrice(50);
-                setMessage("");
+                setUsdcBalance(0);
                 return;
             }
 
@@ -101,299 +78,333 @@ export default function Marketplace() {
                 const owned = await getUserRTBs(address);
                 setOwnedRTBs(owned);
 
-                const hasExplicitSelection = typeof state.tokenId === "number" && typeof state.matchId === "string" && state.matchId.trim().length > 0;
-                if (!hasExplicitSelection && owned.length > 0) {
-                    setTokenId(owned[0].tokenId);
-                    setMatchId(owned[0].matchId);
-                }
-            } catch {
-                setOwnedRTBs([]);
+                const balance = await getUSDCBalance(address);
+                setUsdcBalance(balance);
+
+                // Load marketplace listings
+                const allListings = await getMarketplaceListings();
+                setListings(allListings);
+            } catch (error) {
+                console.error("Error loading wallet data:", error);
             }
         }
 
-        void loadOwnedRTBs();
-    }, [address, connected, state.matchId, state.tokenId]);
+        void loadData();
+    }, [address, connected]);
 
-    const selectedLabel = useMemo(() => {
-        return `RTB #${tokenId} · ${matchId}`;
-    }, [tokenId, matchId]);
-
-    function saveListings(nextListings: MarketplaceListing[]) {
-        setListings(nextListings);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextListings));
-    }
-
-    async function handleCreateListing() {
+    // SELLER: List RTB on marketplace
+    async function handleListRTB() {
         try {
             if (!connected || !address) {
-                setMessage("Vui lòng kết nối ví trước khi đăng pack lên marketplace");
+                setMessage("Vui lòng kết nối ví");
                 return;
             }
 
-            if (!tokenId || !matchId.trim()) {
-                setMessage("Vui lòng nhập token ID và match ID");
-                return;
-            }
-
-            const hasOwnedToken = ownedRTBs.some((item) => item.tokenId === Number(tokenId));
-            if (!hasOwnedToken) {
-                setMessage("Ví này chưa có RTB này nên không thể đăng lên marketplace");
-                return;
-            }
-
-            const fee = Number((price * 0.15).toFixed(2));
-            const sellerReceives = Number((price - fee).toFixed(2));
-
-            const listing: MarketplaceListing = {
-                id: `${Date.now()}-${tokenId}`,
-                tokenId: Number(tokenId),
-                matchId: matchId.trim(),
-                owner: defaultOwner,
-                sellerAddress: address,
-                price: Number(price),
-                fee,
-                sellerReceives,
-                status: "active",
-                createdAt: new Date().toISOString()
-            };
-
-            const next = [listing, ...listings];
-            saveListings(next);
-            setMessage(`Đã đăng RTB #${tokenId} lên marketplace với giá ${price} USDT`);
-        } catch (error: any) {
-            setMessage(error?.message || "Không thể đăng listing");
-        }
-    }
-
-    async function handleBuy(listing: MarketplaceListing) {
-        try {
-            if (!connected || !address) {
-                setMessage("Vui lòng kết nối ví trước khi mua pack");
-                return;
-            }
-
-            if (address.toLowerCase() === listing.sellerAddress.toLowerCase()) {
-                setMessage("Bạn đang là người bán, hãy chờ người khác mua hoặc dùng nút duyệt giao dịch");
-                return;
-            }
-
-            const next = listings.map((item) =>
-                item.id === listing.id
-                    ? { ...item, status: "pending" as const, buyerAddress: address }
-                    : item
-            );
-            saveListings(next);
-            setMessage(`Yêu cầu mua RTB #${listing.tokenId} đã được gửi. Người bán sẽ duyệt giao dịch.`);
-        } catch (error: any) {
-            setMessage(error?.message || "Không thể tạo yêu cầu mua");
-        }
-    }
-
-    async function handleApproveTransfer(listing: MarketplaceListing) {
-        try {
-            if (!connected || !address) {
-                setMessage("Vui lòng kết nối ví trước khi duyệt giao dịch");
-                return;
-            }
-
-            if (!listing.buyerAddress) {
-                setMessage("Chưa có người mua để duyệt");
-                return;
-            }
-
-            if (address.toLowerCase() !== listing.sellerAddress.toLowerCase()) {
-                setMessage("Chỉ người bán mới có thể duyệt giao dịch này");
+            if (!selectedRTB || selectedRTB < 1 || listingPrice <= 0) {
+                setMessage("Vui lòng chọn RTB và nhập giá");
                 return;
             }
 
             setLoading(true);
             setMessage("");
-            const txHash = await transferRTB(listing.buyerAddress, listing.tokenId);
 
-            const next = listings.map((item) =>
-                item.id === listing.id
-                    ? {
-                        ...item,
-                        status: "sold" as const,
-                        owner: listing.buyerAddress ?? item.owner,
-                        buyerAddress: listing.buyerAddress ?? item.buyerAddress
-                    }
-                    : item
-            );
-            saveListings(next);
-            setMessage(`Giao dịch đã được duyệt. TX: ${txHash.slice(0, 12)}...`);
+            // Create listing (transfers RTB to marketplace contract)
+            const txHash = await createMarketplaceListing(selectedRTB, listingPrice);
+            
+            setMessage(`✅ RTB #${selectedRTB} đã được đăng lên Market!\nTx: ${txHash.slice(0, 12)}...`);
+
+            // Reload RTBs and marketplace listings
+            const owned = await getUserRTBs(address);
+            setOwnedRTBs(owned);
+            
+            const allListings = await getMarketplaceListings();
+            setListings(allListings);
+
+            setSelectedRTB(null);
+            setListingPrice(50);
+
+            // Reset after 3 seconds
+            setTimeout(() => {
+                setMessage("");
+            }, 3000);
         } catch (error: any) {
-            setMessage(error?.message || "Duyệt giao dịch thất bại");
+            setMessage(`❌ Lỗi: ${error?.message || "Không thể đăng listing"}`);
+        } finally {
+            setLoading(false);
+        }
+    }
+
+    // BUYER: Buy RTB from marketplace
+    async function handleBuyRTB() {
+        try {
+            if (!connected || !address || !selectedBuyListing) {
+                setMessage("Vui lòng kết nối ví");
+                return;
+            }
+
+            if (usdcBalance < selectedBuyListing.price) {
+                setMessage(`❌ USDC không đủ. Cần ${selectedBuyListing.price} USDC`);
+                return;
+            }
+
+            setLoading(true);
+            setMessage("");
+
+            // Step 1: Transfer USDC to payment wallet
+            setMessage(`Đang chuyển ${selectedBuyListing.price} USDC...`);
+            await transferUSDC(PAYMENT_WALLET, selectedBuyListing.price);
+
+            // Step 2: Buy RTB from marketplace
+            setMessage("Đang ký giao dịch mua RTB...");
+            const txHash = await buyFromMarketplace(selectedBuyListing.tokenId);
+
+            setMessage(`✅ Mua thành công! RTB #${selectedBuyListing.tokenId} của bạn rồi!\nTx: ${txHash.slice(0, 12)}...`);
+
+            // Reload balance and marketplace listings
+            const balance = await getUSDCBalance(address);
+            setUsdcBalance(balance);
+
+            const allListings = await getMarketplaceListings();
+            setListings(allListings);
+
+            setSelectedBuyListing(null);
+
+            setTimeout(() => {
+                setMessage("");
+            }, 3000);
+        } catch (error: any) {
+            setMessage(`❌ Lỗi: ${error?.message || "Không thể mua RTB"}`);
         } finally {
             setLoading(false);
         }
     }
 
     return (
-        <div className="mx-auto min-h-[70vh] max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
-            <div className="w-full rounded-[32px] border border-white/10 bg-slate-900/75 p-8 shadow-2xl shadow-slate-950/20 backdrop-blur">
+        <div className="mx-auto min-h-[70vh] max-w-6xl px-4 py-8">
+            <div className="rounded-[32px] border border-white/10 bg-slate-900/75 p-8 shadow-2xl">
                 <button
                     onClick={() => navigate(-1)}
-                    className="rounded-full border border-white/10 bg-slate-800/70 px-3 py-2 text-sm text-slate-300"
+                    className="flex items-center gap-2 rounded-full border border-white/10 bg-slate-800/70 px-3 py-2 text-sm text-slate-300 hover:bg-slate-700"
                 >
-                    ← Quay lại
+                    <ArrowLeft size={16} />
+                    Quay lại
                 </button>
 
-                <div className="mt-6 grid gap-8 xl:grid-cols-[0.95fr_1.05fr]">
-                    <div>
-                        <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Marketplace</p>
-                        <h1 className="mt-3 text-3xl font-semibold text-white">Sàn giao dịch RTB chung cho các ví</h1>
-                        <p className="mt-3 text-slate-400">
-                            Khi bạn đăng một RTB lên marketplace, nó sẽ xuất hiện cho mọi ví khác xem. Người mua có thể đặt mua, người bán duyệt giao dịch, và hệ thống giữ 15% hoa hồng.
+                {/* SELLER SECTION */}
+                <div className="mt-8">
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                            <Sparkles className="text-yellow-400" size={28} />
+                            Đăng RTB lên Market
+                        </h2>
+                        <p className="text-sm text-slate-400 mt-2">
+                            Chọn RTB của bạn → Nhập giá → Đăng lên marketplace
                         </p>
+                    </div>
 
-                        <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-800/70 p-5 text-sm text-slate-300">
-                            <div className="flex items-center justify-between border-b border-white/10 pb-3">
-                                <span>Pack đang chọn</span>
-                                <span className="font-semibold text-white">{selectedLabel}</span>
-                            </div>
-                            <div className="mt-3 flex items-center justify-between border-b border-white/10 pb-3">
-                                <span>Current owner</span>
-                                <span className="max-w-[220px] truncate font-semibold text-white">{defaultOwner}</span>
-                            </div>
-                            <div className="mt-3 flex items-center justify-between">
-                                <span>Wallet hiện tại</span>
-                                <span className="font-semibold text-white">{address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "Chưa kết nối"}</span>
-                            </div>
+                    <div className="grid gap-4 lg:grid-cols-3">
+                        {/* Select RTB */}
+                        <div className="rounded-lg border border-yellow-400/20 bg-yellow-500/5 p-4">
+                            <label className="block text-sm font-medium text-yellow-300 mb-3">
+                                RTB của bạn
+                            </label>
+                            {ownedRTBs.length > 0 ? (
+                                <select
+                                    value={selectedRTB || ""}
+                                    onChange={(e) => setSelectedRTB(Number(e.target.value) || null)}
+                                    className="w-full rounded-lg border border-yellow-400/30 bg-slate-800 px-3 py-2 text-white focus:border-yellow-400 focus:outline-none"
+                                >
+                                    <option value="">-- Chọn RTB --</option>
+                                    {ownedRTBs.map((rtb) => (
+                                        <option key={rtb.tokenId} value={rtb.tokenId}>
+                                            RTB #{rtb.tokenId} ({rtb.matchId})
+                                        </option>
+                                    ))}
+                                </select>
+                            ) : (
+                                <div className="text-sm text-slate-400 py-2">Không có RTB nào</div>
+                            )}
                         </div>
 
-                        {connected && address && ownedRTBs.length > 0 ? (
-                            <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-800/70 p-5">
-                                <div className="flex items-center gap-2 text-sm font-semibold text-sky-300">
-                                    <Wallet size={16} />
-                                    Đăng pack lên marketplace
+                        {/* Input Price */}
+                        <div className="rounded-lg border border-yellow-400/20 bg-yellow-500/5 p-4">
+                            <label className="block text-sm font-medium text-yellow-300 mb-3">
+                                Giá bán (USDC)
+                            </label>
+                            <input
+                                type="number"
+                                value={listingPrice}
+                                onChange={(e) => setListingPrice(Number(e.target.value))}
+                                min="0"
+                                step="0.1"
+                                className="w-full rounded-lg border border-yellow-400/30 bg-slate-800 px-3 py-2 text-white focus:border-yellow-400 focus:outline-none"
+                            />
+                        </div>
+
+                        {/* Price Breakdown */}
+                        <div className="rounded-lg border border-yellow-400/20 bg-yellow-500/5 p-4">
+                            <p className="text-sm text-yellow-300 font-medium mb-2">Chi tiết giá</p>
+                            {listingPrice > 0 ? (
+                                <div className="text-sm text-slate-300 space-y-1">
+                                    <p>Seller: {(listingPrice * 0.85).toFixed(2)} USDC</p>
+                                    <p className="text-orange-400">Fee (15%): {(listingPrice * 0.15).toFixed(2)} USDC</p>
                                 </div>
+                            ) : (
+                                <p className="text-sm text-slate-500">Nhập giá để xem chi tiết</p>
+                            )}
+                        </div>
+                    </div>
 
-                                <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Token ID</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={tokenId}
-                                    onChange={(e) => setTokenId(Number(e.target.value || 1))}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                    {/* List Button */}
+                    <button
+                        onClick={handleListRTB}
+                        disabled={loading || !connected || !selectedRTB}
+                        className="mt-4 w-full rounded-lg bg-gradient-to-r from-yellow-500 to-orange-500 px-4 py-3 font-semibold text-white hover:from-yellow-600 hover:to-orange-600 disabled:opacity-50 flex items-center justify-center gap-2"
+                    >
+                        {loading ? (
+                            <>
+                                <Loader2 className="animate-spin" size={18} />
+                                Đang đăng...
+                            </>
+                        ) : (
+                            <>
+                                <Sparkles size={18} />
+                                Đăng lên Market
+                            </>
+                        )}
+                    </button>
 
-                            <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Match ID</span>
-                                <input
-                                    value={matchId}
-                                    onChange={(e) => setMatchId(e.target.value)}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                    {message && (
+                        <div className={`mt-4 rounded-lg border p-3 text-sm font-medium whitespace-pre-line ${
+                            message.includes("✅")
+                                ? "border-yellow-400/30 bg-yellow-500/10 text-yellow-300"
+                                : "border-red-400/30 bg-red-500/10 text-red-300"
+                        }`}>
+                            {message}
+                        </div>
+                    )}
+                </div>
 
-                            <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Giá đề xuất (USDT)</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={price}
-                                    onChange={(e) => setPrice(Number(e.target.value || 1))}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                {/* BUYER SECTION */}
+                <div className="mt-12 border-t border-white/10 pt-12">
+                    <div className="mb-6">
+                        <h2 className="text-2xl font-bold text-white flex items-center gap-3">
+                            <ShoppingCart className="text-emerald-400" size={28} />
+                            Mua RTB từ Market
+                        </h2>
+                        <p className="text-sm text-slate-400 mt-2">
+                            USDC Balance: <span className="text-emerald-300 font-semibold">{usdcBalance.toFixed(2)} USDC</span>
+                        </p>
+                    </div>
 
+                    {selectedBuyListing ? (
+                        // Buy confirmation
+                        <div className="max-w-md rounded-lg border border-emerald-400/20 bg-emerald-500/5 p-6">
+                            <h3 className="text-lg font-bold text-emerald-300 mb-4">
+                                Xác nhận mua RTB #{selectedBuyListing.tokenId}
+                            </h3>
+
+                            <div className="space-y-2 rounded-lg bg-slate-800/50 p-4 mb-4 text-sm">
+                                <p className="text-slate-400">Seller: <span className="text-slate-200">{selectedBuyListing.seller.slice(0, 6)}...</span></p>
+                                <p className="text-slate-400">Giá: <span className="text-emerald-300 font-semibold">{selectedBuyListing.price} USDC</span></p>
+                                <p className="text-slate-400">Bạn sẽ chuyển: 
+                                    <span className="text-emerald-300 font-semibold block mt-1">
+                                        {selectedBuyListing.price} USDC
+                                    </span>
+                                </p>
+                            </div>
+
+                            <div className="flex gap-2">
                                 <button
-                                    onClick={handleCreateListing}
-                                    className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/20"
+                                    onClick={handleBuyRTB}
+                                    disabled={loading || usdcBalance < selectedBuyListing.price}
+                                    className="flex-1 rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 font-semibold text-white hover:from-emerald-600 hover:to-teal-600 disabled:opacity-50 flex items-center justify-center gap-2"
                                 >
-                                    <Sparkles size={18} />
-                                    Đăng lên marketplace
+                                    {loading ? (
+                                        <>
+                                            <Loader2 className="animate-spin" size={18} />
+                                            Đang mua...
+                                        </>
+                                    ) : (
+                                        <>
+                                            <Wallet size={18} />
+                                            Xác nhận mua
+                                        </>
+                                    )}
+                                </button>
+                                <button
+                                    onClick={() => setSelectedBuyListing(null)}
+                                    disabled={loading}
+                                    className="flex-1 rounded-lg border border-slate-400/30 bg-slate-800 px-4 py-3 font-semibold text-slate-300 hover:bg-slate-700"
+                                >
+                                    Hủy
                                 </button>
                             </div>
-                        ) : (
-                            <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-800/70 p-5 text-sm text-slate-300">
-                                {connected && address
-                                    ? "Ví này chưa có pack nào để đăng lên marketplace."
-                                    : "Kết nối ví để xem và đăng pack lên marketplace."}
-                            </div>
-                        )}
-                    </div>
 
-                    <div className="space-y-4">
-                        <div className="rounded-[24px] border border-white/10 bg-slate-800/70 p-4 text-sm text-slate-300">
-                            <div className="flex items-center justify-between">
-                                <p className="font-semibold text-white">Danh sách marketplace</p>
-                                <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.3em] text-sky-300">
-                                    {listings.filter((item) => item.status === "active").length} đang bán
-                                </span>
-                            </div>
-                        </div>
-
-                        {listings.length === 0 ? (
-                            <div className="rounded-[24px] border border-white/10 bg-slate-900/70 p-8 text-center text-slate-300">
-                                Chưa có pack nào trên marketplace.
-                            </div>
-                        ) : (
-                            listings.map((listing) => (
-                                <div key={listing.id} className="rounded-[24px] border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300">
-                                    <div className="flex items-start justify-between gap-3">
-                                        <div>
-                                            <p className="font-semibold text-white">RTB #{listing.tokenId}</p>
-                                            <p className="mt-1 text-slate-400">{listing.matchId}</p>
-                                        </div>
-                                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${listing.status === "sold" ? "bg-emerald-500/15 text-emerald-300" : listing.status === "pending" ? "bg-amber-500/15 text-amber-300" : "bg-sky-500/15 text-sky-300"}`}>
-                                            {listing.status === "sold" ? "Đã bán" : listing.status === "pending" ? "Chờ duyệt" : "Đang bán"}
-                                        </span>
-                                    </div>
-
-                                    <div className="mt-4 grid gap-2 text-sm">
-                                        <div className="flex items-center justify-between">
-                                            <span>Giá</span>
-                                            <span className="font-semibold text-white">{listing.price} USDT</span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <span>Hoa hồng 15%</span>
-                                            <span className="font-semibold text-white">{listing.fee} USDT</span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <span>Người bán nhận</span>
-                                            <span className="font-semibold text-white">{listing.sellerReceives} USDT</span>
-                                        </div>
-                                        <div className="flex items-center justify-between">
-                                            <span>Người bán</span>
-                                            <span className="max-w-[180px] truncate font-semibold text-white">{listing.sellerAddress.slice(0, 6)}...{listing.sellerAddress.slice(-4)}</span>
-                                        </div>
-                                    </div>
-
-                                    {listing.status === "active" && (
-                                        <button
-                                            onClick={() => handleBuy(listing)}
-                                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-800 px-4 py-3 font-medium text-slate-100"
-                                        >
-                                            <ArrowRightLeft size={16} />
-                                            Mua pack
-                                        </button>
-                                    )}
-
-                                    {listing.status === "pending" && address?.toLowerCase() === listing.sellerAddress.toLowerCase() && (
-                                        <button
-                                            onClick={() => handleApproveTransfer(listing)}
-                                            disabled={loading}
-                                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 px-4 py-3 font-semibold text-white"
-                                        >
-                                            {loading ? <Sparkles className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                                            Duyệt giao dịch
-                                        </button>
-                                    )}
+                            {message && (
+                                <div className={`mt-4 rounded-lg border p-3 text-sm font-medium whitespace-pre-line ${
+                                    message.includes("✅")
+                                        ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-300"
+                                        : "border-red-400/30 bg-red-500/10 text-red-300"
+                                }`}>
+                                    {message}
                                 </div>
-                            ))
-                        )}
+                            )}
+                        </div>
+                    ) : (
+                        // List of marketplace listings
+                        <div>
+                            {listings.length > 0 ? (
+                                <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                                    {listings.map((listing) => (
+                                        <div
+                                            key={listing.tokenId}
+                                            onClick={() => setSelectedBuyListing(listing)}
+                                            className="cursor-pointer rounded-lg border border-emerald-400/20 bg-emerald-500/5 p-4 hover:border-emerald-400/50 hover:bg-emerald-500/10 transition"
+                                        >
+                                            <div className="space-y-2">
+                                                <p className="text-sm text-slate-400">RTB ID</p>
+                                                <p className="text-lg font-bold text-emerald-300">#{listing.tokenId}</p>
+                                                
+                                                <div className="border-t border-white/10 pt-3 mt-3">
+                                                    <p className="text-sm text-slate-400">Match</p>
+                                                    <p className="text-sm font-semibold text-slate-200">{listing.matchId || "Unknown"}</p>
+                                                </div>
 
-                        {message && (
-                            <div className="rounded-[24px] border border-white/10 bg-slate-900/70 p-4 text-sm text-slate-300">
-                                {message}
-                            </div>
-                        )}
-                    </div>
+                                                <div className="border-t border-white/10 pt-3">
+                                                    <p className="text-sm text-slate-400">Seller</p>
+                                                    <p className="text-sm font-mono text-slate-200 truncate">{listing.seller.slice(0, 10)}...</p>
+                                                </div>
+
+                                                <div className="border-t border-white/10 pt-3">
+                                                    <p className="text-sm text-slate-400">Giá</p>
+                                                    <p className="text-lg font-bold text-emerald-300">{listing.price.toFixed(2)} USDC</p>
+                                                </div>
+
+                                                <button
+                                                    className="mt-4 w-full rounded-lg bg-gradient-to-r from-emerald-500 to-teal-500 px-3 py-2 text-sm font-semibold text-white hover:from-emerald-600 hover:to-teal-600"
+                                                >
+                                                    Mua
+                                                </button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-center text-slate-400 py-8">
+                                    <p className="text-sm">Không có listing nào trên market.</p>
+                                    <p className="text-sm mt-1">Đăng RTB của bạn lên trên để bán!</p>
+                                </div>
+                            )}
+                        </div>
+                    )}
                 </div>
+
+                {!connected && (
+                    <div className="mt-8 rounded-lg border border-yellow-400/20 bg-yellow-500/10 p-4 text-center text-sm text-yellow-300 font-medium">
+                        Kết nối ví để bắt đầu mua và bán RTB
+                    </div>
+                )}
             </div>
         </div>
     );

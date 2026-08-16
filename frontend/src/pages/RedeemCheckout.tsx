@@ -2,11 +2,13 @@ import { useMemo, useState } from "react";
 import { ArrowLeft, CheckCircle2, Loader2, Sparkles } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
-import { createOrder, submitRedeemTx } from "../services/api";
-import { redeemRTB } from "../services/contract";
+import { createOrder, submitRedeemTx, verifyPayment } from "../services/api";
+import { redeemRTB, transferUSDC } from "../services/contract";
 import { matches as defaultMatches } from "../data/matches";
 
 const HIDDEN_REDEEMED_RTBS_KEY = "hidden-redeemed-rtbs";
+const REDEEM_FEE_USDC = 20; // 20 USDC for redeem
+const PAYMENT_WALLET = import.meta.env.VITE_PAYMENT_WALLET || "0x8c75a2eC18f3B5Dcca94C8aF239AcdB01109dA64";
 
 function markRedeemedRTB(tokenId: number) {
     try {
@@ -33,7 +35,7 @@ interface RedeemLocationState {
     rtbTokenId?: number;
 }
 
-type CheckoutStep = "checkout" | "processing" | "success";
+type CheckoutStep = "checkout" | "processing_payment" | "payment_verified" | "processing_redeem" | "success";
 
 export default function RedeemCheckout() {
     const navigate = useNavigate();
@@ -44,6 +46,7 @@ export default function RedeemCheckout() {
     const [message, setMessage] = useState("");
     const [txHash, setTxHash] = useState("");
     const [seat, setSeat] = useState("");
+    const [paymentTxHash, setPaymentTxHash] = useState("");
 
     const redeemState = (location.state as RedeemLocationState | null) ?? {};
     const selectedMatch = useMemo(() => {
@@ -76,20 +79,53 @@ export default function RedeemCheckout() {
             setLoading(true);
             setMessage("");
             setTxHash("");
-            setStep("processing");
+            setPaymentTxHash("");
+            setStep("processing_payment");
 
+            // Step 1: Transfer USDC to Payment Wallet
+            console.log(`[REDEEM] Starting USDC payment (${REDEEM_FEE_USDC} USDC)...`);
+            const usdcTxHash = await transferUSDC(PAYMENT_WALLET, REDEEM_FEE_USDC);
+            setPaymentTxHash(usdcTxHash);
+            setMessage(`USDC payment sent: ${usdcTxHash.slice(0, 12)}...`);
+
+            // Step 2: Verify USDC payment with backend
+            console.log(`[REDEEM] Verifying USDC payment...`);
+            setStep("payment_verified");
+            setMessage("Verifying USDC payment...");
+            
+            const verifyResult = await verifyPayment(
+                address,
+                selectedMatch.matchId,
+                usdcTxHash,
+                REDEEM_FEE_USDC
+            );
+            console.log("[REDEEM] Payment verified:", verifyResult);
+            setMessage("Payment verified! Processing redeem...");
+
+            // Step 3: Call redeem contract function
+            console.log(`[REDEEM] Calling redeem(${rtbTokenId})...`);
+            setStep("processing_redeem");
+            setMessage("Processing redeem on blockchain...");
+            
+            const redeemTxHash = await redeemRTB(rtbTokenId);
+            setTxHash(redeemTxHash);
+            setMessage(`Redeem successful: ${redeemTxHash.slice(0, 12)}...`);
+
+            // Step 4: Create order
             const orderPayload = {
                 userAddress: address,
                 rtbTokenId,
                 matchId: selectedMatch.matchId,
                 category: selectedMatch.category || "Standard",
                 seat: seat.trim(),
-                price: 20
+                price: REDEEM_FEE_USDC
             };
+            await createOrder(orderPayload);
 
-            const orderResp = await createOrder(orderPayload);
-            const tx = await redeemRTB(rtbTokenId);
-            await submitRedeemTx(tx);
+            // Step 5: Submit redeem tx to backend
+            console.log(`[REDEEM] Submitting redeem tx to backend...`);
+            await submitRedeemTx(redeemTxHash);
+            
             markRedeemedRTB(rtbTokenId);
 
             const purchasePayload = {
@@ -97,11 +133,10 @@ export default function RedeemCheckout() {
                 label: `${selectedMatch.teamA} vs ${selectedMatch.teamB}`,
                 purchaseMode: "rtb-right",
                 seat: seat.trim(),
-                orderId: orderResp?.data?.orderId || orderResp?.orderId
+                orderId: `REDEEM_${Date.now()}`
             };
 
             localStorage.setItem("lastPurchasedRTB", JSON.stringify(purchasePayload));
-            setTxHash(tx);
             setMessage(`Bạn đã sử dụng quyền mua RTB thành công cho ${selectedMatch.teamA} vs ${selectedMatch.teamB}. RTT đã được mint vào ví của bạn.`);
             setStep("success");
         } catch (error: any) {
@@ -157,8 +192,8 @@ export default function RedeemCheckout() {
                             <span className="font-semibold text-white">{selectedMatch.stadium}</span>
                         </div>
                         <div className="flex items-center justify-between py-3">
-                            <span>Giá</span>
-                            <span className="font-semibold text-white">$20</span>
+                            <span>Phí Redeem (USDC)</span>
+                            <span className="font-semibold text-white">{REDEEM_FEE_USDC} USDC</span>
                         </div>
                     </div>
 
@@ -175,9 +210,9 @@ export default function RedeemCheckout() {
                     </div>
 
                     <div className="rounded-2xl border border-emerald-400/20 bg-emerald-500/10 p-4 text-sm text-emerald-100">
-                        <p className="font-semibold text-white">Thanh toán bằng quyền mua RTB</p>
+                        <p className="font-semibold text-white">Thanh toán bằng USDC</p>
                         <p className="mt-1 text-emerald-50/90">
-                            Sau khi xác nhận, RTB sẽ bị xóa khỏi collection và RTT sẽ hiện trên trang Ticket.
+                            Bạn sẽ chuyển {REDEEM_FEE_USDC} USDC. Sau khi thanh toán xác nhận, RTB sẽ bị xóa và RTT sẽ hiện trên trang Ticket.
                         </p>
                     </div>
 
@@ -194,20 +229,36 @@ export default function RedeemCheckout() {
                         ) : (
                             <>
                                 <Sparkles size={18} />
-                                Xác nhận sử dụng quyền mua
+                                Thanh toán & Redeem
                             </>
                         )}
                     </button>
                 </div>
             )}
 
-            {step === "processing" && (
+            {(step === "processing_payment" || step === "payment_verified" || step === "processing_redeem") && (
                 <div className="mt-8 rounded-2xl border border-white/10 bg-slate-800/80 p-6 text-center text-slate-300">
                     <Loader2 className="mx-auto animate-spin text-sky-300" size={32} />
-                    <p className="mt-4 text-lg font-semibold text-white">Đang tiến hành thanh toán...</p>
-                    <p className="mt-2 text-sm text-slate-400">
-                        Hệ thống đang redeem RTB trên blockchain và mint RTT cho trận {selectedMatch.teamA} vs {selectedMatch.teamB}.
+                    <p className="mt-4 text-lg font-semibold text-white">
+                        {step === "processing_payment" && "Xử lý thanh toán USDC..."}
+                        {step === "payment_verified" && "Xác minh thanh toán..."}
+                        {step === "processing_redeem" && "Đang redeem RTB..."}
                     </p>
+                    <p className="mt-2 text-sm text-slate-400">
+                        {step === "processing_payment" && "Chuyển USDC tới ví thanh toán..."}
+                        {step === "payment_verified" && "Kiểm tra thanh toán trên blockchain..."}
+                        {step === "processing_redeem" && "Đang burn RTB và mint RTT..."}
+                    </p>
+                    {message && (
+                        <p className="mt-3 text-xs text-sky-300">
+                            {message}
+                        </p>
+                    )}
+                    {paymentTxHash && (
+                        <p className="mt-2 break-all text-xs text-slate-400">
+                            Payment Tx: {paymentTxHash.slice(0, 20)}...
+                        </p>
+                    )}
                 </div>
             )}
 
@@ -220,7 +271,8 @@ export default function RedeemCheckout() {
                     </p>
                     <div className="mt-4 rounded-2xl border border-white/10 bg-slate-900/70 p-4 text-left text-sm text-slate-300">
                         <p>{message}</p>
-                        {txHash && <p className="mt-2 break-all text-xs text-sky-300">Tx: {txHash}</p>}
+                        {txHash && <p className="mt-2 break-all text-xs text-sky-300">Redeem Tx: {txHash}</p>}
+                        {paymentTxHash && <p className="mt-1 break-all text-xs text-slate-400">Payment Tx: {paymentTxHash}</p>}
                     </div>
                     <button
                         onClick={() => navigate("/ticket")}

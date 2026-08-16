@@ -293,6 +293,143 @@ export async function processRedeemTx(
 
 
 // ================================
+// Verify USDC Payment for Redeem
+// ================================
+
+export async function verifyRedeemPayment(
+    userAddress: string,
+    rtbTokenId: number,
+    matchId: string,
+    paymentTxHash: string,
+    expectedAmount: number = 20 // Default 20 USDC for redeem
+) {
+    if (!userAddress) throw new Error("Thiếu địa chỉ user");
+    if (!rtbTokenId) throw new Error("RTB Token ID không hợp lệ");
+    if (!matchId) throw new Error("Match không hợp lệ");
+    if (!paymentTxHash) throw new Error("Thiếu payment transaction hash");
+    if (expectedAmount <= 0) throw new Error("Số tiền không hợp lệ");
+
+    // Check if payment tx hash has been used
+    const existingOrder = await findOrderByPaymentTxHash(paymentTxHash);
+    if (existingOrder) {
+        throw new Error("Payment transaction hash đã được sử dụng");
+    }
+
+    // Verify USDC payment using existing function
+    // Note: This will throw if payment is not valid
+    const USDC_ADDRESS = process.env.USDC_ADDRESS;
+    const PAYMENT_WALLET = process.env.PAYMENT_WALLET;
+    const USDC_DECIMALS = parseInt(process.env.USDC_DECIMALS || "6");
+
+    if (!USDC_ADDRESS || !PAYMENT_WALLET) {
+        throw new Error("USDC configuration không hoàn chỉnh");
+    }
+
+    console.log(`[VERIFY REDEEM PAYMENT] txHash: ${paymentTxHash}`);
+    console.log(`[VERIFY REDEEM PAYMENT] userAddress: ${userAddress}`);
+    console.log(`[VERIFY REDEEM PAYMENT] rtbTokenId: ${rtbTokenId}`);
+    console.log(`[VERIFY REDEEM PAYMENT] expectedAmount: ${expectedAmount} USDC`);
+
+    // Get transaction receipt
+    const receipt = await provider.getTransactionReceipt(paymentTxHash);
+    if (!receipt) {
+        throw new Error("Transaction chưa được xác nhận");
+    }
+
+    if (!receipt.status) {
+        throw new Error("Transaction thất bại");
+    }
+
+    // Verify USDC Transfer
+    const transferEventSignature = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
+    const expectedAmount_uint256 = BigInt(expectedAmount) * BigInt(10 ** USDC_DECIMALS);
+
+    let foundTransfer = false;
+
+    for (let i = 0; i < receipt.logs.length; i++) {
+        const log = receipt.logs[i];
+
+        // Check if log is from USDC contract
+        if (log.address.toLowerCase() !== USDC_ADDRESS.toLowerCase()) {
+            continue;
+        }
+
+        // Check if log is Transfer event
+        if (log.topics[0] !== transferEventSignature) {
+            continue;
+        }
+
+        // Parse Transfer event
+        const from = "0x" + log.topics[1].slice(-40);
+        const to = "0x" + log.topics[2].slice(-40);
+        const transferAmount = BigInt(log.data);
+
+        // Verify sender = userAddress
+        if (from.toLowerCase() !== userAddress.toLowerCase()) {
+            continue;
+        }
+
+        // Verify receiver = PAYMENT_WALLET
+        if (to.toLowerCase() !== PAYMENT_WALLET.toLowerCase()) {
+            continue;
+        }
+
+        // Verify amount
+        if (transferAmount !== expectedAmount_uint256) {
+            continue;
+        }
+
+        console.log(`[VERIFY REDEEM PAYMENT] ✓ Payment verified successfully!`);
+        foundTransfer = true;
+        break;
+    }
+
+    if (!foundTransfer) {
+        throw new Error(
+            `USDC transfer not found: expected ${expectedAmount} USDC from ${userAddress} to ${PAYMENT_WALLET}`
+        );
+    }
+
+    // Find existing order for this RTB
+    const existingRTBOrder = await findOrderByRtbTokenId(rtbTokenId);
+    
+    let orderId: string;
+    if (existingRTBOrder) {
+        orderId = existingRTBOrder.id;
+        // Update existing order with payment info
+        await updateOrderAfterPaymentVerification(orderId, paymentTxHash);
+    } else {
+        // Create new order for redeem
+        orderId = `REDEEM_${Date.now()}`;
+        const order: OrderRow = {
+            id: orderId,
+            userId: userAddress,
+            matchId,
+            category: null,
+            seat: null,
+            price: expectedAmount,
+            status: "PENDING",
+            rtbTokenId,
+            paymentTxHash,
+            paymentVerifiedAt: new Date(),
+            idempotencyKey: paymentTxHash,
+            createdAt: new Date()
+        };
+        await createOrder(order);
+        await updateOrderAfterPaymentVerification(orderId, paymentTxHash);
+    }
+
+    return {
+        orderId,
+        status: "PAYMENT_VERIFIED",
+        paymentTxHash,
+        rtbTokenId,
+        message: "Payment verified. Ready to redeem RTB."
+    };
+}
+
+
+// ================================
 // Verify USDC Payment
 // ================================
 

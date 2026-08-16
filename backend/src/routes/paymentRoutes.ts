@@ -6,6 +6,7 @@ import {
     getOrder,
     getUserOrders,
     verifyPayment,
+    verifyRedeemPayment,
     submitRedeemTx,
     updateOrderStatus
 } from "../controllers/paymentController";
@@ -23,6 +24,9 @@ router.get("/user/:userAddress", getUserOrders);
 
 // Verify USDC payment & mint RTB
 router.post("/verify-payment", verifyPayment);
+
+// Verify USDC payment for Redeem
+router.post("/verify-redeem-payment", verifyRedeemPayment);
 
 // FE gửi txHash sau redeem
 router.post("/redeem", submitRedeemTx);

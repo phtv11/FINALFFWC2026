@@ -4,6 +4,7 @@ import cors from "cors";
 import rtbRoutes from "./routes/rtbRoutes";
 import rttRoutes from "./routes/rttRoutes";
 import paymentRoutes from "./routes/paymentRoutes";
+import marketplaceRoutes from "./routes/marketplaceRoutes";
 import matchRoutes from "./routes/matchRoutes";
 import errorHandler from "./middleware/errorHandler";
 import { startIndexer } from "./services/indexerService";
@@ -18,6 +19,9 @@ app.use("/api/rtb", rtbRoutes);
 
 // Payment APIs
 app.use("/api/payment", paymentRoutes);
+
+// Marketplace APIs
+app.use("/api/marketplace", marketplaceRoutes);
 
 // RTT API
 app.use("/api/rtt", rttRoutes);
