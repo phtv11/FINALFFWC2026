@@ -3,7 +3,7 @@ import { Request, Response, NextFunction } from "express";
 import * as paymentService
 from "../services/paymentService";
 
-import { findOrdersByUser } from "../repositories/orderRepository";
+import { findOrdersByUser, findOrderByRttTokenId } from "../repositories/orderRepository";
 
 
 // =================================
@@ -176,6 +176,43 @@ export async function getUserOrders(
         return res.json({
             success: true,
             data: orders
+        });
+    } catch (error) {
+        next(error);
+    }
+}
+
+// =================================
+// Lấy Order by RTT Token ID
+// =================================
+
+export async function getOrderByRttTokenId(
+    req: Request,
+    res: Response,
+    next: NextFunction
+) {
+    try {
+        const rttTokenId = parseInt(String(req.params.rttTokenId), 10);
+
+        if (isNaN(rttTokenId)) {
+            return res.status(400).json({
+                success: false,
+                message: "RTT Token ID không hợp lệ"
+            });
+        }
+
+        const order = await findOrderByRttTokenId(rttTokenId);
+
+        if (!order) {
+            return res.status(404).json({
+                success: false,
+                message: "Không tìm thấy order cho RTT này"
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: order
         });
     } catch (error) {
         next(error);

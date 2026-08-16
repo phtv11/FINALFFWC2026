@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import RTTCard from "../components/RTTCard";
 import { useWallet } from "../hooks/useWallet";
-import { issueTicket } from "../services/api";
+import { issueTicket, getOrderByRttTokenId } from "../services/api";
 import { getUserRTTs } from "../services/contract";
 
 interface RTT {
@@ -9,6 +9,8 @@ interface RTT {
     matchId: string;
     status: string;
     ticketRef?: string;
+    category?: string;
+    seat?: string;
 }
 
 export default function Ticket() {
@@ -24,7 +26,26 @@ export default function Ticket() {
 
             setLoading(true);
             const data = await getUserRTTs(address);
-            setTickets(data);
+            
+            // For each RTT, try to fetch order details to get category + seat
+            const enrichedData = await Promise.all(
+                data.map(async (rtt) => {
+                    try {
+                        const order = await getOrderByRttTokenId(rtt.tokenId);
+                        return {
+                            ...rtt,
+                            category: order.data?.category,
+                            seat: order.data?.seat
+                        };
+                    } catch (error) {
+                        // If no order found, just return RTT as is
+                        console.log(`No order found for RTT #${rtt.tokenId}`);
+                        return rtt;
+                    }
+                })
+            );
+            
+            setTickets(enrichedData);
         } catch (error) {
             console.error(error);
         } finally {
@@ -97,6 +118,8 @@ export default function Ticket() {
                                     matchId={ticket.matchId}
                                     status={ticket.status}
                                     ticketRef={ticket.ticketRef}
+                                    category={ticket.category}
+                                    seat={ticket.seat}
                                     onRedeem={handleRedeemTicket}
                                 />
                             ))

@@ -5,6 +5,7 @@ import {
     pay,
     getOrder,
     getUserOrders,
+    getOrderByRttTokenId,
     verifyPayment,
     submitRedeemTx,
     updateOrderStatus
@@ -17,6 +18,9 @@ router.post("/pay", pay);
 
 // Lấy order
 router.get("/order/:orderId", getOrder);
+
+// Lấy order by RTT Token ID
+router.get("/order-by-rtt/:rttTokenId", getOrderByRttTokenId);
 
 // Lấy orders của user
 router.get("/user/:userAddress", getUserOrders);

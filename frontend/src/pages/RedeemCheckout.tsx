@@ -49,6 +49,7 @@ export default function RedeemCheckout() {
     const [message, setMessage] = useState("");
     const [txHash, setTxHash] = useState("");
     const [seat, setSeat] = useState("");
+    const [category, setCategory] = useState("");
     const [paymentTxHash, setPaymentTxHash] = useState("");
 
     const redeemState = (location.state as RedeemLocationState | null) ?? {};
@@ -76,6 +77,11 @@ export default function RedeemCheckout() {
 
             if (!seat.trim()) {
                 setMessage("Vui lòng nhập chỗ ngồi");
+                return;
+            }
+
+            if (!category.trim()) {
+                setMessage("Vui lòng nhập Category");
                 return;
             }
 
@@ -115,7 +121,7 @@ export default function RedeemCheckout() {
                 userAddress: address,
                 rtbTokenId,
                 matchId: selectedMatch.matchId,
-                category: selectedMatch.category || "Standard",
+                category: category.trim(),
                 seat: seat.trim(),
                 price: USDC_AMOUNT,
                 paymentTxHash: usdcTxHash
@@ -215,6 +221,12 @@ export default function RedeemCheckout() {
                     <div className="rounded-2xl border border-white/10 bg-slate-800/70 p-4 text-sm text-slate-300">
                         <p className="mb-2 font-semibold text-white">Thông tin thanh toán</p>
                         <div className="grid gap-3">
+                            <input
+                                value={category}
+                                onChange={(e) => setCategory(e.target.value)}
+                                placeholder="Category (ví dụ: Standard, VIP)"
+                                className="rounded-lg bg-slate-900/60 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-400"
+                            />
                             <input
                                 value={seat}
                                 onChange={(e) => setSeat(e.target.value)}

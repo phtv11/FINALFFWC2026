@@ -176,6 +176,13 @@ export async function getOrder(
 
 }
 
+export async function getOrderByRttTokenId(rttTokenId: number) {
+    const response = await api.get(
+        `/payment/order-by-rtt/${rttTokenId}`
+    );
+    return response.data;
+}
+
 
 
 

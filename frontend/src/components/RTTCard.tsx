@@ -6,10 +6,12 @@ interface RTTProps {
     matchId: string;
     status: string;
     ticketRef?: string;
+    category?: string;
+    seat?: string;
     onRedeem?: (tokenId: number) => Promise<void> | void;
 }
 
-export default function RTTCard({ tokenId, matchId, status, ticketRef, onRedeem }: RTTProps) {
+export default function RTTCard({ tokenId, matchId, status, ticketRef, category, seat, onRedeem }: RTTProps) {
     const [loading, setLoading] = useState(false);
 
     async function handleRedeem() {
@@ -47,6 +49,16 @@ export default function RTTCard({ tokenId, matchId, status, ticketRef, onRedeem 
                         {status}
                     </span>
                 </p>
+                {category && (
+                    <p>
+                        Category: <span className="ml-1 font-medium text-white">{category}</span>
+                    </p>
+                )}
+                {seat && (
+                    <p>
+                        Seat: <span className="ml-1 font-medium text-white">{seat}</span>
+                    </p>
+                )}
                 {ticketRef && (
                     <p>
                         Ticket Ref:
