@@ -121,202 +121,31 @@ export async function getOrder(orderId: string) {
 // Nhận txHash sau khi user redeem
 //
 // Frontend:
-// MetaMask redeem()
-//        |
-//        v
-// txHash gửi backend
+// 1. Approve USDC
+// 2. Transfer USDC
+// 3. Wait for confirmation
+// 4. Redeem RTB
+// 5. Send both txHashes to backend
 //
 // Backend:
-// đọc event RedeemedToRTT
-// update order với holder từ blockchain
+// 1. Verify USDC payment
+// 2. Verify redeem event
+// 3. Update order với cả 2 txHash
 // ================================
 
-
-export async function processRedeemTx(
-    txHash:string
-){
-
-
-    if(!txHash)
-        throw new Error(
-            "Thiếu transaction hash"
-        );
-
-
-
-    const receipt =
-        await provider.getTransactionReceipt(
-            txHash
-        );
-
-
-
-    if(!receipt)
-        throw new Error(
-            "Transaction chưa được xác nhận"
-        );
-
-
-
-    const rtbInterface =
-        new ethers.Interface(
-            RTB.abi
-        );
-
-
-
-    let rttTokenId:number | undefined;
-
-    let rtbTokenId:number | undefined;
-
-    let holder:string | undefined;
-
-
-
-    for(
-        const log of receipt.logs
-    ){
-
-        try {
-
-
-            const parsed =
-                rtbInterface.parseLog({
-                    topics:
-                    log.topics as string[],
-
-                    data:
-                    log.data
-                });
-
-
-
-            if(
-                parsed &&
-                parsed.name ===
-                "RedeemedToRTT"
-            ){
-
-
-                rtbTokenId =
-                    Number(
-                        parsed.args.rtbTokenId
-                    );
-
-
-                rttTokenId =
-                    Number(
-                        parsed.args.rttTokenId
-                    );
-
-                // Get holder from blockchain event (source of truth)
-                holder =
-                    String(
-                        parsed.args.holder ?? parsed.args[1]
-                    );
-
-
-            }
-
-
-        }
-        catch{
-
-            continue;
-
-        }
-
-    }
-
-
-
-    if(
-        !rtbTokenId ||
-        !rttTokenId ||
-        !holder
-    ){
-
-        throw new Error(
-            "Không tìm thấy event RedeemedToRTT hoặc holder"
-        );
-
-    }
-
-
-
-    const order = await findOrderByRtbTokenId(rtbTokenId);
-
-    if(!order)
-        throw new Error(
-            "Không tìm thấy order"
-        );
-
-
-
-    // Update order với:
-    // - rttTokenId
-    // - userId = holder (from blockchain, source of truth)
-    // - status = REDEEMED
-    const updated = await updateOrderStatusRepo(
-        order.id,
-        "REDEEMED",
-        rttTokenId
-    );
-
-    if (!updated) {
-        throw new Error("Không thể cập nhật order");
-    }
-
-    // Update userId to holder if it changed due to transfer
-    if (updated.userId !== holder) {
-        // Also update userId
-        const pool = await connectDB();
-        await pool.request()
-            .input("id", order.id)
-            .input("userId", holder)
-            .query(`
-                UPDATE [dbo].[orders]
-                SET [userId] = @userId
-                WHERE [id] = @id;
-            `);
-        
-        // Return updated order with new userId
-        return await findOrderById(order.id);
-    }
-
-    return updated;
-
-}
-
-
-
-
-
-// ================================
-// Verify USDC Payment for Redeem
-// ================================
-
-export async function verifyRedeemPayment(
-    userAddress: string,
-    rtbTokenId: number,
-    matchId: string,
+async function verifyUSDCPaymentForRedeem(
     paymentTxHash: string,
-    expectedAmount: number = 20 // Default 20 USDC for redeem
+    expectedAmount: number
 ) {
-    if (!userAddress) throw new Error("Thiếu địa chỉ user");
-    if (!rtbTokenId) throw new Error("RTB Token ID không hợp lệ");
-    if (!matchId) throw new Error("Match không hợp lệ");
-    if (!paymentTxHash) throw new Error("Thiếu payment transaction hash");
-    if (expectedAmount <= 0) throw new Error("Số tiền không hợp lệ");
-
-    // Check if payment tx hash has been used
-    const existingOrder = await findOrderByPaymentTxHash(paymentTxHash);
-    if (existingOrder) {
-        throw new Error("Payment transaction hash đã được sử dụng");
+    if (!paymentTxHash) {
+        throw new Error("Thiếu payment transaction hash");
     }
 
-    // Verify USDC payment using existing function
-    // Note: This will throw if payment is not valid
+    if (expectedAmount <= 0) {
+        throw new Error("Số tiền không hợp lệ");
+    }
+
+    // Get config from environment
     const USDC_ADDRESS = process.env.USDC_ADDRESS;
     const PAYMENT_WALLET = process.env.PAYMENT_WALLET;
     const USDC_DECIMALS = parseInt(process.env.USDC_DECIMALS || "6");
@@ -325,27 +154,26 @@ export async function verifyRedeemPayment(
         throw new Error("USDC configuration không hoàn chỉnh");
     }
 
-    console.log(`[VERIFY REDEEM PAYMENT] txHash: ${paymentTxHash}`);
-    console.log(`[VERIFY REDEEM PAYMENT] userAddress: ${userAddress}`);
-    console.log(`[VERIFY REDEEM PAYMENT] rtbTokenId: ${rtbTokenId}`);
-    console.log(`[VERIFY REDEEM PAYMENT] expectedAmount: ${expectedAmount} USDC`);
+    console.log(`[VERIFY USDC FOR REDEEM] txHash: ${paymentTxHash}`);
 
     // Get transaction receipt
     const receipt = await provider.getTransactionReceipt(paymentTxHash);
     if (!receipt) {
-        throw new Error("Transaction chưa được xác nhận");
+        throw new Error("USDC transaction chưa được xác nhận");
     }
 
     if (!receipt.status) {
-        throw new Error("Transaction thất bại");
+        throw new Error("USDC transaction thất bại");
     }
 
-    // Verify USDC Transfer
+    // USDC.e on Avalanche Fuji uses custom Transfer event signature
     const transferEventSignature = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
     const expectedAmount_uint256 = BigInt(expectedAmount) * BigInt(10 ** USDC_DECIMALS);
 
     let foundTransfer = false;
+    let transferFrom: string | undefined;
 
+    // Iterate through logs to find USDC Transfer event
     for (let i = 0; i < receipt.logs.length; i++) {
         const log = receipt.logs[i];
 
@@ -364,11 +192,6 @@ export async function verifyRedeemPayment(
         const to = "0x" + log.topics[2].slice(-40);
         const transferAmount = BigInt(log.data);
 
-        // Verify sender = userAddress
-        if (from.toLowerCase() !== userAddress.toLowerCase()) {
-            continue;
-        }
-
         // Verify receiver = PAYMENT_WALLET
         if (to.toLowerCase() !== PAYMENT_WALLET.toLowerCase()) {
             continue;
@@ -379,54 +202,204 @@ export async function verifyRedeemPayment(
             continue;
         }
 
-        console.log(`[VERIFY REDEEM PAYMENT] ✓ Payment verified successfully!`);
+        // All checks passed
+        transferFrom = from;
         foundTransfer = true;
         break;
     }
 
     if (!foundTransfer) {
         throw new Error(
-            `USDC transfer not found: expected ${expectedAmount} USDC from ${userAddress} to ${PAYMENT_WALLET}`
+            `USDC transfer not found: expected ${expectedAmount} USDC to ${PAYMENT_WALLET}`
         );
     }
 
-    // Find existing order for this RTB
-    const existingRTBOrder = await findOrderByRtbTokenId(rtbTokenId);
-    
-    let orderId: string;
-    if (existingRTBOrder) {
-        orderId = existingRTBOrder.id;
-        // Update existing order with payment info
-        await updateOrderAfterPaymentVerification(orderId, paymentTxHash);
-    } else {
-        // Create new order for redeem
-        orderId = `REDEEM_${Date.now()}`;
-        const order: OrderRow = {
-            id: orderId,
-            userId: userAddress,
-            matchId,
-            category: null,
-            seat: null,
-            price: expectedAmount,
-            status: "PENDING",
-            rtbTokenId,
-            paymentTxHash,
-            paymentVerifiedAt: new Date(),
-            idempotencyKey: paymentTxHash,
-            createdAt: new Date()
-        };
-        await createOrder(order);
-        await updateOrderAfterPaymentVerification(orderId, paymentTxHash);
+    console.log(`[VERIFY USDC FOR REDEEM] ✓ Payment verified successfully!`);
+
+    return transferFrom;
+}
+
+export async function processRedeemTx(
+    txHash: string,
+    paymentTxHash?: string
+) {
+
+    if (!txHash)
+        throw new Error(
+            "Thiếu transaction hash"
+        );
+
+    // ===========================
+    // Step 1: Verify USDC Payment
+    // ===========================
+    if (paymentTxHash) {
+        const USDC_AMOUNT = 20; // Fixed price for redeem
+        console.log(`[PROCESS REDEEM] Verifying USDC payment: ${paymentTxHash}`);
+        
+        try {
+            await verifyUSDCPaymentForRedeem(paymentTxHash, USDC_AMOUNT);
+            console.log(`[PROCESS REDEEM] ✓ USDC payment verified`);
+        } catch (error) {
+            console.error(`[PROCESS REDEEM] ✗ USDC payment verification failed: ${error}`);
+            throw new Error(`USDC payment verification failed: ${error}`);
+        }
     }
 
+    // ===========================
+    // Step 2: Verify Redeem Event
+    // ===========================
+    console.log(`[PROCESS REDEEM] Verifying redeem event: ${txHash}`);
+
+    const receipt =
+        await provider.getTransactionReceipt(
+            txHash
+        );
+
+    if (!receipt)
+        throw new Error(
+            "Transaction chưa được xác nhận"
+        );
+
+    if (!receipt.status) {
+        throw new Error("Redeem transaction thất bại");
+    }
+
+    const rtbInterface =
+        new ethers.Interface(
+            RTB.abi
+        );
+
+    let rttTokenId: number | undefined;
+
+    let rtbTokenId: number | undefined;
+
+    let holder: string | undefined;
+
+    for (
+        const log of receipt.logs
+    ) {
+
+        try {
+
+            const parsed =
+                rtbInterface.parseLog({
+                    topics:
+                    log.topics as string[],
+
+                    data:
+                    log.data
+                });
+
+            if (
+                parsed &&
+                parsed.name ===
+                "RedeemedToRTT"
+            ) {
+
+                rtbTokenId =
+                    Number(
+                        parsed.args.rtbTokenId
+                    );
+
+                rttTokenId =
+                    Number(
+                        parsed.args.rttTokenId
+                    );
+
+                // Get holder from blockchain event (source of truth)
+                holder =
+                    String(
+                        parsed.args.holder ?? parsed.args[1]
+                    );
+
+            }
+
+        }
+        catch {
+
+            continue;
+
+        }
+
+    }
+
+    if (
+        !rtbTokenId ||
+        !rttTokenId ||
+        !holder
+    ) {
+
+        throw new Error(
+            "Không tìm thấy event RedeemedToRTT hoặc holder"
+        );
+
+    }
+
+    console.log(`[PROCESS REDEEM] ✓ Redeem event verified: rtbTokenId=${rtbTokenId}, rttTokenId=${rttTokenId}, holder=${holder}`);
+
+    // ===========================
+    // Step 3: Find & Update Order
+    // ===========================
+    const order = await findOrderByRtbTokenId(rtbTokenId);
+
+    if (!order)
+        throw new Error(
+            "Không tìm thấy order"
+        );
+
+    // Update order với:
+    // - rttTokenId
+    // - userId = holder (from blockchain, source of truth)
+    // - status = REDEEMED
+    // - paymentTxHash (if provided)
+    
+    const pool = await connectDB();
+    const updateRequest = pool.request()
+        .input("id", order.id)
+        .input("rttTokenId", rttTokenId)
+        .input("userId", holder)
+        .input("status", "REDEEMED");
+
+    if (paymentTxHash) {
+        updateRequest.input("paymentTxHash", paymentTxHash);
+    }
+
+    let query = `
+        UPDATE [dbo].[orders]
+        SET [rttTokenId] = @rttTokenId,
+            [userId] = @userId,
+            [status] = @status
+    `;
+
+    if (paymentTxHash) {
+        query += `, [paymentTxHash] = @paymentTxHash`;
+    }
+
+    query += ` WHERE [id] = @id;`;
+
+    await updateRequest.query(query);
+
+    console.log(`[PROCESS REDEEM] ✓ Order updated: id=${order.id}`);
+
+    const updated = await findOrderById(order.id);
+
     return {
-        orderId,
-        status: "PAYMENT_VERIFIED",
-        paymentTxHash,
+        success: true,
+        orderId: order.id,
+        status: "REDEEMED",
         rtbTokenId,
-        message: "Payment verified. Ready to redeem RTB."
+        rttTokenId,
+        userId: holder,
+        paymentTxHash,
+        redeemTxHash: txHash,
+        order: updated
     };
+
 }
+
+
+
+
 
 
 // ================================

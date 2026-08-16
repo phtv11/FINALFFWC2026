@@ -45,9 +45,6 @@ contract FIFARTB is ERC721, AccessControl {
     /// @notice Địa chỉ contract FIFARTT — nơi nhận lệnh mint khi holder redeem RTB -> RTT.
     IFIFARTT public rttContract;
 
-    /// @notice Marketplace contract address that is approved to transfer RTBs
-    address public approvedMarketplace;
-
     /// @dev Cờ tạm để cho phép _update() phân biệt giữa transferRTB() (hợp lệ) và
     ///      transferFrom()/safeTransferFrom() mặc định của ERC721 (bị chặn).
     bool private _inControlledTransfer;
@@ -57,18 +54,10 @@ contract FIFARTB is ERC721, AccessControl {
     event RedeemedToRTT(uint256 indexed rtbTokenId, address indexed holder, uint256 indexed rttTokenId);
     event RTTContractSet(address indexed rttContract);
     event MaxSupplySet(string indexed matchId, uint256 maxSupply);
-    event MarketplaceApproved(address indexed marketplace);
 
     constructor() ERC721("FIFA Right-to-Buy Demo", "RTB-DEMO") {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
         _grantRole(OPERATOR_ROLE, msg.sender);
-    }
-
-    /// @notice Admin approves a Marketplace contract to transfer RTBs
-    function setApprovedMarketplace(address marketplaceAddress) external onlyRole(DEFAULT_ADMIN_ROLE) {
-        require(marketplaceAddress != address(0), "Dia chi marketplace khong hop le");
-        approvedMarketplace = marketplaceAddress;
-        emit MarketplaceApproved(marketplaceAddress);
     }
 
     /// @notice Admin gắn địa chỉ contract RTT sau khi deploy nó (bước 3 trong trình tự deploy ở trên).
@@ -128,14 +117,10 @@ contract FIFARTB is ERC721, AccessControl {
     }
 
     /// @dev Chặn mọi chuyển nhượng ERC721 mặc định (transferFrom/safeTransferFrom) — bắt buộc phải
-    ///      đi qua transferRTB() để giao dịch, TRỪ KHI từ Marketplace contract được phê duyệt.
+    ///      đi qua transferRTB() để giao dịch.
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
         address from = _ownerOf(tokenId);
-        // Allow transfer if:
-        // 1. It's a controlled transfer via transferRTB()
-        // 2. It's from the approved marketplace contract
-        // 3. It's minting (from == address(0)) or burning (to == address(0))
-        if (from != address(0) && to != address(0) && !_inControlledTransfer && msg.sender != approvedMarketplace) {
+        if (from != address(0) && to != address(0) && !_inControlledTransfer) {
             revert("Dung transferRTB() thay vi transfer mac dinh");
         }
         return super._update(to, tokenId, auth);

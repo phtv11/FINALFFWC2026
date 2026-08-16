@@ -2,7 +2,6 @@ import { ethers } from "ethers";
 
 import FIFARTB from "../abi/FIFARTB.json";
 import FIFARTT from "../abi/FIFARTT.json";
-import FIFARTBMarketplace from "../abi/FIFARTBMarketplace.json";
 import USDC from "../abi/USDC.json";
 
 
@@ -18,13 +17,14 @@ const RTB_ADDRESS =
 const RTT_ADDRESS =
     import.meta.env.VITE_RTT_ADDRESS;
 
-const MARKETPLACE_ADDRESS =
-    import.meta.env.VITE_MARKETPLACE_ADDRESS;
-
 const USDC_ADDRESS =
-    import.meta.env.VITE_USDC_ADDRESS || "0x5425890298aed601595a70AB815c96711a31Bc65";
+    import.meta.env.VITE_USDC_ADDRESS;
 
-const USDC_DECIMALS = 6;
+const PAYMENT_WALLET =
+    import.meta.env.VITE_PAYMENT_WALLET;
+
+const USDC_DECIMALS =
+    parseInt(import.meta.env.VITE_USDC_DECIMALS || "6");
 
 
 
@@ -172,6 +172,33 @@ async function getRTTReadContract(){
         FIFARTT.abi,
 
         provider
+
+    );
+
+
+}
+
+
+// ==============================
+// Lấy contract USDC có signer
+// Dùng approve + transfer
+// ==============================
+
+async function getUSDCContract(){
+
+
+    const signer =
+        await getSigner();
+
+
+
+    return new ethers.Contract(
+
+        USDC_ADDRESS,
+
+        USDC as any,
+
+        signer
 
     );
 
@@ -359,328 +386,67 @@ export async function getRTTStatus(
 
 
 // ==================================================
-// MARKETPLACE FUNCTIONS
+// USDC PAYMENT
+// Approve & Transfer USDC
 // ==================================================
 
-// ==============================
-// Get Marketplace Contract (read)
-// ==============================
-
-async function getMarketplaceReadContract() {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-    
+export async function checkUSDCAllowance(
+    userAddress: string,
+    amount: number
+): Promise<boolean> {
     const provider = getProvider();
-    
-    return new ethers.Contract(
-        MARKETPLACE_ADDRESS,
-        FIFARTBMarketplace.abi,
+    const contract = new ethers.Contract(
+        USDC_ADDRESS,
+        USDC as any,
         provider
     );
-}
 
-
-// ==============================
-// Get Marketplace Contract (write)
-// ==============================
-
-async function getMarketplaceContract() {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-
-    const signer = await getSigner();
-    
-    return new ethers.Contract(
-        MARKETPLACE_ADDRESS,
-        FIFARTBMarketplace.abi,
-        signer
+    const allowance = await contract.allowance(
+        userAddress,
+        PAYMENT_WALLET
     );
-}
 
-
-// ==============================
-// Get USDC Contract (write)
-// ==============================
-
-async function getUSDCContract() {
-    const signer = await getSigner();
-    
-    return new ethers.Contract(
-        USDC_ADDRESS,
-        USDC.abi,
-        signer
-    );
-}
-
-
-// ==============================
-// Get USDC Contract (read)
-// ==============================
-
-async function getUSDCReadContract() {
-    const provider = getProvider();
-    
-    return new ethers.Contract(
-        USDC_ADDRESS,
-        USDC.abi,
-        provider
-    );
-}
-
-
-// ==============================
-// Seller: Create Listing
-// ==============================
-
-export async function createMarketplaceListing(
-    tokenId: number,
-    priceUSDC: number
-) {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-
-    const marketplace = await getMarketplaceContract();
-    
-    // Convert price to USDC units (6 decimals)
-    const priceInSmallestUnits = ethers.parseUnits(
-        priceUSDC.toString(),
+    const amountWei = ethers.parseUnits(
+        amount.toString(),
         USDC_DECIMALS
     );
-    
-    const tx = await marketplace.createListing(
-        tokenId,
-        priceInSmallestUnits
-    );
-    
-    await tx.wait();
-    
-    return tx.hash;
+
+    return allowance >= amountWei;
 }
 
+export async function approveUSDC(amount: number) {
+    const contract = await getUSDCContract();
 
-// ==============================
-// Seller: Cancel Listing
-// ==============================
-
-export async function cancelMarketplaceListing(tokenId: number) {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-
-    const marketplace = await getMarketplaceContract();
-    
-    const tx = await marketplace.cancelListing(tokenId);
-    
-    await tx.wait();
-    
-    return tx.hash;
-}
-
-
-// ==============================
-// Buyer: Approve USDC for Marketplace
-// ==============================
-
-export async function approveUSDCForMarketplace(amountUSDC: number) {
-    const usdc = await getUSDCContract();
-    
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-    
-    // Convert to smallest units (6 decimals)
-    const amount = ethers.parseUnits(
-        amountUSDC.toString(),
+    const amountWei = ethers.parseUnits(
+        amount.toString(),
         USDC_DECIMALS
     );
-    
-    const tx = await usdc.approve(MARKETPLACE_ADDRESS, amount);
-    
-    await tx.wait();
-    
-    return tx.hash;
-}
 
-
-// ==============================
-// Check USDC Allowance
-// ==============================
-
-export async function getUSDCAllowance(userAddress: string) {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-
-    const usdc = await getUSDCReadContract();
-    
-    const allowance = await usdc.allowance(userAddress, MARKETPLACE_ADDRESS);
-    
-    // Convert from smallest units to USDC
-    return Number(allowance) / (10 ** USDC_DECIMALS);
-}
-
-
-// ==============================
-// Check USDC Balance
-// ==============================
-
-export async function getUSDCBalance(userAddress: string) {
-    const usdc = await getUSDCReadContract();
-    
-    const balance = await usdc.balanceOf(userAddress);
-    
-    // Convert from smallest units to USDC
-    return Number(balance) / (10 ** USDC_DECIMALS);
-}
-
-
-// ==============================
-// Buyer: Buy RTB from Marketplace
-// ==============================
-
-export async function buyFromMarketplace(tokenId: number) {
-    if (!MARKETPLACE_ADDRESS) {
-        throw new Error("Marketplace address not configured");
-    }
-
-    const marketplace = await getMarketplaceContract();
-    
-    const tx = await marketplace.buy(tokenId);
-    
-    await tx.wait();
-    
-    return tx.hash;
-}
-
-
-// ==============================
-// Read: Get Listing Details
-// ==============================
-
-export async function getMarketplaceListing(tokenId: number) {
-    const marketplace = await getMarketplaceReadContract();
-    
-    const listing = await marketplace.getListing(tokenId);
-    
-    // Convert price from smallest units to USDC
-    const priceUSDC = Number(listing.price) / (10 ** USDC_DECIMALS);
-    const feeAmount = (priceUSDC * 15) / 100;
-    const sellerAmount = priceUSDC - feeAmount;
-    
-    return {
-        seller: listing.seller,
-        tokenId: Number(listing.tokenId),
-        price: priceUSDC,
-        active: listing.active,
-        createdAt: Number(listing.createdAt),
-        feeAmount,
-        sellerAmount
-    };
-}
-
-// ==============================
-// Read: Get All Active Listings
-// ==============================
-
-export async function getMarketplaceListings() {
-    const marketplace = await getMarketplaceReadContract();
-    const provider = getProvider();
-    const rtbContract = new ethers.Contract(RTB_ADDRESS, FIFARTB.abi, provider);
-    
-    const listings = [];
-    
-    // Scan token IDs from 1 to 1000 to find active listings
-    for (let tokenId = 1; tokenId <= 1000; tokenId++) {
-        try {
-            const isActive = await marketplace.isListingActive(tokenId);
-            
-            if (isActive) {
-                const listing = await marketplace.getListing(tokenId);
-                
-                // Convert price from smallest units to USDC
-                const priceUSDC = Number(listing.price) / (10 ** USDC_DECIMALS);
-                
-                // Get matchId from RTB contract
-                let matchId = "Unknown";
-                try {
-                    const tokenInfo = await rtbContract.tokenInfo(tokenId);
-                    matchId = tokenInfo.matchId;
-                } catch (e) {
-                    // Token doesn't exist or error, use Unknown
-                }
-                
-                listings.push({
-                    seller: listing.seller,
-                    tokenId: Number(listing.tokenId),
-                    price: priceUSDC,
-                    active: listing.active,
-                    createdAt: Number(listing.createdAt),
-                    matchId: matchId
-                });
-            }
-        } catch (error) {
-            // Token ID doesn't exist or error reading, continue
-            continue;
-        }
-    }
-    
-    return listings;
-}
-
-
-// ==============================
-// Read: Check if Listing is Active
-// ==============================
-
-export async function isMarketplaceListingActive(tokenId: number) {
-    const marketplace = await getMarketplaceReadContract();
-    
-    return await marketplace.isListingActive(tokenId);
-}
-
-
-// ==============================
-// Read: Calculate Fee
-// ==============================
-
-export async function calculateMarketplaceFee(priceUSDC: number) {
-    const marketplace = await getMarketplaceReadContract();
-    
-    const priceInSmallestUnits = ethers.parseUnits(
-        priceUSDC.toString(),
-        USDC_DECIMALS
+    const tx = await contract.approve(
+        PAYMENT_WALLET,
+        amountWei
     );
-    
-    const fee = await marketplace.calculateFee(priceInSmallestUnits);
-    
-    // Convert from smallest units to USDC
-    return Number(fee) / (10 ** USDC_DECIMALS);
+
+    await tx.wait();
+
+    return tx.hash;
 }
-
-
-// ==============================
-// Transfer USDC (for Redeem payment)
-// ==============================
 
 export async function transferUSDC(
-    recipientAddress: string,
-    amountUSDC: number
+    to: string,
+    amount: number
 ) {
-    const usdc = await getUSDCContract();
-    
-    // Convert to smallest units (6 decimals) using ethers.parseUnits
-    const amount = ethers.parseUnits(
-        amountUSDC.toString(),
+    const contract = await getUSDCContract();
+
+    const amountWei = ethers.parseUnits(
+        amount.toString(),
         USDC_DECIMALS
     );
-    
-    const tx = await usdc.transfer(recipientAddress, amount);
-    
+
+    const tx = await contract.transfer(to, amountWei);
+
     await tx.wait();
-    
+
     return tx.hash;
 }
 
@@ -894,8 +660,3 @@ export async function getUserRTTs(
 
 
 }
-
-// ==================================================
-// USDC TRANSFER
-// User transfers USDC to Payment Wallet
-// ==================================================

@@ -140,60 +140,6 @@ async function main() {
 
 
     // ==========================
-    // Deploy FIFARTBMarketplace
-    // ==========================
-
-    console.log("Deploying FIFARTBMarketplace...");
-
-    const MarketplaceFactory = await ethers.getContractFactory(
-        "FIFARTBMarketplace"
-    );
-
-    const treasuryWallet = process.env.PAYMENT_WALLET || deployer.address;
-    const usdcAddress = process.env.USDC_ADDRESS;
-
-    if (!usdcAddress) {
-        throw new Error("USDC_ADDRESS not configured in .env");
-    }
-
-    const marketplace = await MarketplaceFactory.deploy(
-        rtbAddress,
-        usdcAddress,
-        treasuryWallet,
-        {
-            gasLimit: 3000000n
-        }
-    );
-
-    await marketplace.waitForDeployment();
-
-    const marketplaceAddress = await marketplace.getAddress();
-
-    console.log(
-        "FIFARTBMarketplace deployed:",
-        marketplaceAddress
-    );
-
-
-    // ==========================
-    // Set Marketplace as approved
-    // ==========================
-
-    console.log("Setting marketplace as approved operator...");
-
-    const setMarketplaceTx = await rtb.setApprovedMarketplace(
-        marketplaceAddress,
-        {
-            gasLimit: 500000n
-        }
-    );
-
-    await setMarketplaceTx.wait();
-
-    console.log("Marketplace set as approved operator");
-
-
-    // ==========================
     // Save address to .env files
     // ==========================
 
@@ -235,12 +181,6 @@ async function main() {
     );
 
     upsertEnvValue(
-        path.resolve(__dirname, "../.env"),
-        "MARKETPLACE_ADDRESS",
-        marketplaceAddress
-    );
-
-    upsertEnvValue(
         path.resolve(__dirname, "../../backend/.env"),
         "RTB_ADDRESS",
         rtbAddress
@@ -250,12 +190,6 @@ async function main() {
         path.resolve(__dirname, "../../backend/.env"),
         "RTT_ADDRESS",
         rttAddress
-    );
-
-    upsertEnvValue(
-        path.resolve(__dirname, "../../backend/.env"),
-        "MARKETPLACE_ADDRESS",
-        marketplaceAddress
     );
 
     upsertEnvValue(
@@ -270,18 +204,11 @@ async function main() {
         rttAddress
     );
 
-    upsertEnvValue(
-        path.resolve(__dirname, "../../frontend/.env"),
-        "VITE_MARKETPLACE_ADDRESS",
-        marketplaceAddress
-    );
-
 
     console.log("--------------------------------");
     console.log("DEPLOY FINISHED");
     console.log("RTB:", rtbAddress);
     console.log("RTT:", rttAddress);
-    console.log("Marketplace:", marketplaceAddress);
     console.log("--------------------------------");
 
 }

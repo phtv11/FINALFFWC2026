@@ -20,6 +20,13 @@ interface RTB {
     owner: string;
 }
 
+interface RTT {
+    tokenId: number;
+    matchId: string;
+    status: string;
+    ticketRef?: string;
+}
+
 export default function Collection() {
     const { address, connected } = useWallet();
     const [rtbs, setRTBs] = useState<RTB[]>([]);

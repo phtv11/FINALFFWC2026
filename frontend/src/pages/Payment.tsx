@@ -9,7 +9,6 @@ import { matches as defaultMatches } from "../data/matches";
 const PACK_PURCHASE_HISTORY_KEY = "fifa-pack-purchase-history";
 const AVALANCHE_FUJI_EXPLORER = "https://testnet.snowtrace.io/tx";
 const HIDDEN_REDEEMED_RTBS_KEY = "hidden-redeemed-rtbs";
-const PAYMENT_WALLET = import.meta.env.VITE_PAYMENT_WALLET || "0x8c75a2eC18f3B5Dcca94C8aF239AcdB01109dA64";
 
 function recordPackPurchase(walletAddress: string, matchId: string) {
     try {
@@ -136,12 +135,13 @@ export default function Payment() {
             } else {
                 // PACK FLOW (new USDC payment flow)
                 const PACK_PRICE = 20; // USDC
+                const paymentWallet = import.meta.env.VITE_PAYMENT_WALLET;
 
                 // Step 1: Transfer USDC
                 setStep("payment");
                 setMessage("Đang chuyển USDC từ ví của bạn...");
 
-                const paymentTx = await transferUSDC(PAYMENT_WALLET, PACK_PRICE);
+                const paymentTx = await transferUSDC(paymentWallet, PACK_PRICE);
                 setPaymentTxHash(paymentTx);
                 setMessage("USDC đã được chuyển. Đang xác minh thanh toán trên blockchain...");
 

@@ -119,11 +119,12 @@ export async function createOrder(
 
 
 export async function submitRedeemTx(
-    txHash: string
+    txHash: string,
+    paymentTxHash?: string
 ) {
     const response = await api.post(
         "/payment/redeem",
-        { txHash }
+        { txHash, paymentTxHash }
     );
 
     return response.data;

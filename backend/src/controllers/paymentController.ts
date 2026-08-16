@@ -256,87 +256,7 @@ export async function verifyPayment(
 }
 
 
-// =================================
-// Verify USDC Payment for Redeem
-// =================================
 
-export async function verifyRedeemPayment(
-
-    req:Request,
-
-    res:Response,
-
-    next:NextFunction
-
-){
-
-    try{
-
-        const {
-            userAddress,
-            rtbTokenId,
-            matchId,
-            paymentTxHash,
-            amount
-        } = req.body;
-
-        if (!userAddress || typeof userAddress !== "string") {
-            return res.status(400).json({
-                success: false,
-                message: "User address không hợp lệ"
-            });
-        }
-
-        if (typeof rtbTokenId !== "number" || rtbTokenId < 0) {
-            return res.status(400).json({
-                success: false,
-                message: "RTB token ID không hợp lệ"
-            });
-        }
-
-        if (!matchId || typeof matchId !== "string") {
-            return res.status(400).json({
-                success: false,
-                message: "Match ID không hợp lệ"
-            });
-        }
-
-        if (!paymentTxHash || typeof paymentTxHash !== "string") {
-            return res.status(400).json({
-                success: false,
-                message: "Payment transaction hash không hợp lệ"
-            });
-        }
-
-        if (typeof amount !== "number" || amount <= 0) {
-            return res.status(400).json({
-                success: false,
-                message: "Amount không hợp lệ"
-            });
-        }
-
-        const result =
-            await paymentService.verifyRedeemPayment(
-                userAddress,
-                rtbTokenId,
-                matchId,
-                paymentTxHash,
-                amount
-            );
-
-        res.status(200).json({
-            success: true,
-            data: result
-        });
-
-    }
-    catch(error){
-
-        next(error);
-
-    }
-
-}
 
 // =================================
 // Nhận txHash redeem từ FE
@@ -356,14 +276,16 @@ export async function submitRedeemTx(
 
 
         const {
-            txHash
+            txHash,
+            paymentTxHash
         } = req.body;
 
 
 
         const result =
             await paymentService.processRedeemTx(
-                txHash
+                txHash,
+                paymentTxHash
             );
 
 
