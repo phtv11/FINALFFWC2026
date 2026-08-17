@@ -112,5 +112,25 @@ export async function initializeDatabase(): Promise<void> {
                 CONSTRAINT [PK_token_index] PRIMARY KEY ([collection], [tokenId])
             );
         END;
+
+        IF OBJECT_ID(N'[dbo].[marketplace_listing]', N'U') IS NULL
+        BEGIN
+            CREATE TABLE [dbo].[marketplace_listing] (
+                [listingId] INT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+                [rtbTokenId] INT NOT NULL,
+                [seller] NVARCHAR(255) NOT NULL,
+                [buyer] NVARCHAR(255) NULL,
+                [price] DECIMAL(18, 6) NOT NULL,
+                [status] NVARCHAR(20) NOT NULL DEFAULT 'ACTIVE',
+                [listTxHash] NVARCHAR(255) NULL,
+                [buyTxHash] NVARCHAR(255) NULL,
+                [createdAt] DATETIME2 NOT NULL DEFAULT GETDATE(),
+                [soldAt] DATETIME2 NULL,
+                CONSTRAINT [UQ_marketplace_listing_rtbTokenId] UNIQUE ([rtbTokenId])
+            );
+
+            CREATE INDEX IX_marketplace_listing_status_createdAt
+                ON [dbo].[marketplace_listing] ([status], [createdAt] DESC);
+        END;
     `);
 }

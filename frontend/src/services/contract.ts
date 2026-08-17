@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import FIFARTB from "../abi/FIFARTB.json";
 import FIFARTT from "../abi/FIFARTT.json";
 import USDC from "../abi/USDC.json";
+import MarketplaceAbi from "../abi/Marketplace.json";
 
 
 
@@ -19,6 +20,9 @@ const RTT_ADDRESS =
 
 const USDC_ADDRESS =
     import.meta.env.VITE_USDC_ADDRESS;
+
+const MARKETPLACE_ADDRESS =
+    import.meta.env.VITE_MARKETPLACE_ADDRESS;
 
 const PAYMENT_WALLET =
     import.meta.env.VITE_PAYMENT_WALLET;
@@ -209,6 +213,31 @@ async function getUSDCContract(){
 
 
 
+
+
+// ==============================
+// Lấy contract marketplace có signer
+// Dùng list + buy
+// ==============================
+
+async function getMarketplaceContract(){
+
+    const signer =
+        await getSigner();
+
+
+    return new ethers.Contract(
+
+        MARKETPLACE_ADDRESS,
+
+        MarketplaceAbi.abi,
+
+        signer
+
+    );
+
+
+}
 
 
 // ==================================================
@@ -423,13 +452,73 @@ export async function approveUSDC(amount: number) {
     );
 
     const tx = await contract.approve(
-        PAYMENT_WALLET,
+        MARKETPLACE_ADDRESS,
         amountWei
     );
 
     await tx.wait();
 
     return tx.hash;
+}
+
+export async function approveRTBForMarketplace(tokenId: number) {
+    const contract = await getRTBContract();
+    const tx = await contract.approve(MARKETPLACE_ADDRESS, tokenId);
+    await tx.wait();
+    return tx.hash;
+}
+
+export async function listRTB(tokenId: number, price: number) {
+    const contract = await getMarketplaceContract();
+    const tx = await contract.listRTB(tokenId, ethers.parseUnits(price.toString(), USDC_DECIMALS));
+    await tx.wait();
+    return tx.hash;
+}
+
+export async function buyMarketRTB(listingId: number, price: number) {
+    const usdc = await getUSDCContract();
+    const marketplace = await getMarketplaceContract();
+    const priceWei = ethers.parseUnits(price.toString(), USDC_DECIMALS);
+
+    const signer = await getSigner();
+    const allowance = await usdc.allowance(await signer.getAddress(), MARKETPLACE_ADDRESS);
+    if (allowance < priceWei) {
+        const approveTx = await usdc.approve(MARKETPLACE_ADDRESS, priceWei);
+        await approveTx.wait();
+    }
+
+    const tx = await marketplace.buyRTB(listingId);
+    await tx.wait();
+    return tx.hash;
+}
+
+export async function getMarketListings() {
+    const provider = getProvider();
+    const contract = new ethers.Contract(MARKETPLACE_ADDRESS, MarketplaceAbi.abi, provider);
+    const nextId = await contract.nextListingId();
+    const total = Number(nextId) - 1;
+
+    const items: Array<{ listingId: bigint; tokenId: bigint; seller: string; buyer: string; price: bigint; status: bigint; createdAt: bigint; soldAt: bigint }> = [];
+
+    for (let i = 1; i <= total; i++) {
+        try {
+            const listing = await contract.listings(i);
+            items.push(listing);
+        } catch {
+            // ignore invalid listing slots
+        }
+    }
+
+    return items.map((listing) => ({
+        listingId: Number(listing.listingId),
+        rtbTokenId: Number(listing.tokenId),
+        seller: listing.seller,
+        buyer: listing.buyer,
+        price: Number(ethers.formatUnits(listing.price, USDC_DECIMALS)),
+        status: Number(listing.status) === 0 ? "ACTIVE" : Number(listing.status) === 1 ? "SOLD" : "CANCELLED",
+        createdAt: Number(listing.createdAt),
+        soldAt: Number(listing.soldAt)
+    }));
 }
 
 export async function transferUSDC(

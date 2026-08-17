@@ -121,7 +121,10 @@ contract FIFARTB is ERC721, AccessControl {
     function _update(address to, uint256 tokenId, address auth) internal override returns (address) {
         address from = _ownerOf(tokenId);
         if (from != address(0) && to != address(0) && !_inControlledTransfer) {
-            revert("Dung transferRTB() thay vi transfer mac dinh");
+            bool isApprovedTransfer = auth == from || getApproved(tokenId) == auth || isApprovedForAll(from, auth);
+            if (!isApprovedTransfer) {
+                revert("Dung transferRTB() thay vi transfer mac dinh");
+            }
         }
         return super._update(to, tokenId, auth);
     }

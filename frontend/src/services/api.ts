@@ -196,6 +196,21 @@ export async function getUserOrders(
     return response.data;
 }
 
+export async function getMarketplaceListings() {
+    const response = await api.get("/marketplace/listings");
+    return response.data?.data ?? [];
+}
+
+export async function getMarketplaceListingById(listingId: number) {
+    const response = await api.get(`/marketplace/listings/${listingId}`);
+    return response.data?.data ?? null;
+}
+
+export async function getMarketplaceOwner(address: string) {
+    const response = await api.get(`/marketplace/owner/${encodeURIComponent(address)}`);
+    return response.data?.data ?? null;
+}
+
 // ============================
 // RTT API
 // ============================

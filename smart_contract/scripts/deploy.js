@@ -95,6 +95,35 @@ async function main() {
 
 
     // ==========================
+    // Deploy Marketplace
+    // ==========================
+
+    console.log("Deploying Marketplace...");
+
+    const marketplaceFactory = await ethers.getContractFactory(
+        "Marketplace"
+    );
+
+    const marketplace = await marketplaceFactory.deploy(
+        rtbAddress,
+        process.env.USDC_ADDRESS || "0x5425890298aed601595a70AB815c96711a31Bc65",
+        process.env.PAYMENT_WALLET || deployer.address,
+        {
+            gasLimit: 3000000n
+        }
+    );
+
+    await marketplace.waitForDeployment();
+
+    const marketplaceAddress = await marketplace.getAddress();
+
+    console.log(
+        "Marketplace deployed:",
+        marketplaceAddress
+    );
+
+
+    // ==========================
     // Grant OPERATOR_ROLE
     // cho Backend
     // ==========================
@@ -181,6 +210,12 @@ async function main() {
     );
 
     upsertEnvValue(
+        path.resolve(__dirname, "../.env"),
+        "MARKETPLACE_ADDRESS",
+        marketplaceAddress
+    );
+
+    upsertEnvValue(
         path.resolve(__dirname, "../../backend/.env"),
         "RTB_ADDRESS",
         rtbAddress
@@ -190,6 +225,12 @@ async function main() {
         path.resolve(__dirname, "../../backend/.env"),
         "RTT_ADDRESS",
         rttAddress
+    );
+
+    upsertEnvValue(
+        path.resolve(__dirname, "../../backend/.env"),
+        "MARKETPLACE_ADDRESS",
+        marketplaceAddress
     );
 
     upsertEnvValue(
@@ -204,11 +245,18 @@ async function main() {
         rttAddress
     );
 
+    upsertEnvValue(
+        path.resolve(__dirname, "../../frontend/.env"),
+        "VITE_MARKETPLACE_ADDRESS",
+        marketplaceAddress
+    );
+
 
     console.log("--------------------------------");
     console.log("DEPLOY FINISHED");
     console.log("RTB:", rtbAddress);
     console.log("RTT:", rttAddress);
+    console.log("Marketplace:", marketplaceAddress);
     console.log("--------------------------------");
 
 }

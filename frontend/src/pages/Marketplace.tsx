@@ -1,8 +1,9 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRightLeft, CheckCircle2, Sparkles, Wallet } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { ArrowRightLeft, Sparkles, Wallet } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
-import { getUserRTBs, transferRTB } from "../services/contract";
+import { approveRTBForMarketplace, buyMarketRTB, getMarketListings, getUserRTBs, listRTB, approveUSDC } from "../services/contract";
+import { getMarketplaceListings } from "../services/api";
 
 interface MarketplaceLocationState {
     tokenId?: number;
@@ -11,20 +12,15 @@ interface MarketplaceLocationState {
 }
 
 interface MarketplaceListing {
-    id: string;
-    tokenId: number;
-    matchId: string;
-    owner: string;
-    sellerAddress: string;
+    listingId: number;
+    rtbTokenId: number;
+    seller: string;
+    buyer: string | null;
     price: number;
-    fee: number;
-    sellerReceives: number;
-    status: "active" | "pending" | "sold";
-    buyerAddress?: string;
-    createdAt: string;
+    status: "ACTIVE" | "SOLD" | "CANCELLED";
+    createdAt: number;
+    soldAt: number | null;
 }
-
-const STORAGE_KEY = "marketplace-listings";
 
 export default function Marketplace() {
     const navigate = useNavigate();
@@ -43,57 +39,29 @@ export default function Marketplace() {
     const [ownedRTBs, setOwnedRTBs] = useState<Array<{ tokenId: number; matchId: string }>>([]);
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
-    const previousWalletRef = useRef<string | null>(null);
-    const previousConnectedRef = useRef(false);
-    const hasInitializedWalletRef = useRef(false);
 
-    useEffect(() => {
+    const fetchListings = async () => {
         try {
-            const raw = localStorage.getItem(STORAGE_KEY);
-            if (raw) {
-                const parsed = JSON.parse(raw) as MarketplaceListing[];
-                setListings(parsed);
-            } else {
-                setListings([]);
-            }
+            const backendListings = await getMarketplaceListings();
+            const chainListings = await getMarketListings();
+            const merged = [...backendListings, ...chainListings].filter((item, idx, arr) => {
+                const key = item.listingId ?? item.rtbTokenId;
+                return arr.findIndex((candidate) => (candidate.listingId ?? candidate.rtbTokenId) === key) === idx;
+            });
+            setListings(merged as MarketplaceListing[]);
         } catch {
             setListings([]);
         }
+    };
+
+    useEffect(() => {
+        void fetchListings();
     }, []);
 
     useEffect(() => {
-        if (!hasInitializedWalletRef.current) {
-            hasInitializedWalletRef.current = true;
-            previousWalletRef.current = address ?? null;
-            previousConnectedRef.current = connected;
-            return;
-        }
-
-        const walletChanged = previousWalletRef.current !== address || previousConnectedRef.current !== connected;
-        if (!walletChanged) {
-            previousWalletRef.current = address ?? null;
-            previousConnectedRef.current = connected;
-            return;
-        }
-
-        setOwnedRTBs([]);
-        setTokenId(1);
-        setMatchId("MATCH-001");
-        setPrice(50);
-        setMessage("");
-
-        previousWalletRef.current = address ?? null;
-        previousConnectedRef.current = connected;
-    }, [address, connected]);
-
-    useEffect(() => {
-        async function loadOwnedRTBs() {
+        const loadOwnedRTBs = async () => {
             if (!connected || !address) {
                 setOwnedRTBs([]);
-                setTokenId(1);
-                setMatchId("MATCH-001");
-                setPrice(50);
-                setMessage("");
                 return;
             }
 
@@ -101,27 +69,19 @@ export default function Marketplace() {
                 const owned = await getUserRTBs(address);
                 setOwnedRTBs(owned);
 
-                const hasExplicitSelection = typeof state.tokenId === "number" && typeof state.matchId === "string" && state.matchId.trim().length > 0;
-                if (!hasExplicitSelection && owned.length > 0) {
+                if (owned.length > 0 && typeof state.tokenId !== "number") {
                     setTokenId(owned[0].tokenId);
                     setMatchId(owned[0].matchId);
                 }
             } catch {
                 setOwnedRTBs([]);
             }
-        }
+        };
 
         void loadOwnedRTBs();
-    }, [address, connected, state.matchId, state.tokenId]);
+    }, [address, connected, state.tokenId]);
 
-    const selectedLabel = useMemo(() => {
-        return `RTB #${tokenId} · ${matchId}`;
-    }, [tokenId, matchId]);
-
-    function saveListings(nextListings: MarketplaceListing[]) {
-        setListings(nextListings);
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextListings));
-    }
+    const selectedLabel = useMemo(() => `RTB #${tokenId} · ${matchId}`, [tokenId, matchId]);
 
     async function handleCreateListing() {
         try {
@@ -141,27 +101,18 @@ export default function Marketplace() {
                 return;
             }
 
-            const fee = Number((price * 0.15).toFixed(2));
-            const sellerReceives = Number((price - fee).toFixed(2));
+            setLoading(true);
+            setMessage("Đang phê duyệt RTB cho Marketplace...");
+            await approveRTBForMarketplace(Number(tokenId));
 
-            const listing: MarketplaceListing = {
-                id: `${Date.now()}-${tokenId}`,
-                tokenId: Number(tokenId),
-                matchId: matchId.trim(),
-                owner: defaultOwner,
-                sellerAddress: address,
-                price: Number(price),
-                fee,
-                sellerReceives,
-                status: "active",
-                createdAt: new Date().toISOString()
-            };
-
-            const next = [listing, ...listings];
-            saveListings(next);
-            setMessage(`Đã đăng RTB #${tokenId} lên marketplace với giá ${price} USDT`);
+            setMessage("Đang đăng RTB lên blockchain...");
+            const txHash = await listRTB(Number(tokenId), Number(price));
+            setMessage(`Đã đăng RTB #${tokenId} lên marketplace. TX: ${txHash.slice(0, 12)}...`);
+            await fetchListings();
         } catch (error: any) {
             setMessage(error?.message || "Không thể đăng listing");
+        } finally {
+            setLoading(false);
         }
     }
 
@@ -172,58 +123,22 @@ export default function Marketplace() {
                 return;
             }
 
-            if (address.toLowerCase() === listing.sellerAddress.toLowerCase()) {
-                setMessage("Bạn đang là người bán, hãy chờ người khác mua hoặc dùng nút duyệt giao dịch");
-                return;
-            }
-
-            const next = listings.map((item) =>
-                item.id === listing.id
-                    ? { ...item, status: "pending" as const, buyerAddress: address }
-                    : item
-            );
-            saveListings(next);
-            setMessage(`Yêu cầu mua RTB #${listing.tokenId} đã được gửi. Người bán sẽ duyệt giao dịch.`);
-        } catch (error: any) {
-            setMessage(error?.message || "Không thể tạo yêu cầu mua");
-        }
-    }
-
-    async function handleApproveTransfer(listing: MarketplaceListing) {
-        try {
-            if (!connected || !address) {
-                setMessage("Vui lòng kết nối ví trước khi duyệt giao dịch");
-                return;
-            }
-
-            if (!listing.buyerAddress) {
-                setMessage("Chưa có người mua để duyệt");
-                return;
-            }
-
-            if (address.toLowerCase() !== listing.sellerAddress.toLowerCase()) {
-                setMessage("Chỉ người bán mới có thể duyệt giao dịch này");
+            if (address.toLowerCase() === listing.seller.toLowerCase()) {
+                setMessage("Bạn đang là người bán. Chọn listing khác.");
                 return;
             }
 
             setLoading(true);
-            setMessage("");
-            const txHash = await transferRTB(listing.buyerAddress, listing.tokenId);
+            setMessage("Đang phê duyệt USDC cho Marketplace...");
+            await approveUSDC(Number(listing.price));
 
-            const next = listings.map((item) =>
-                item.id === listing.id
-                    ? {
-                        ...item,
-                        status: "sold" as const,
-                        owner: listing.buyerAddress ?? item.owner,
-                        buyerAddress: listing.buyerAddress ?? item.buyerAddress
-                    }
-                    : item
-            );
-            saveListings(next);
-            setMessage(`Giao dịch đã được duyệt. TX: ${txHash.slice(0, 12)}...`);
+            setMessage("Đang mua RTB trên blockchain...");
+            const txHash = await buyMarketRTB(Number(listing.listingId), Number(listing.price));
+            setMessage(`Mua thành công RTB #${listing.rtbTokenId}. TX: ${txHash.slice(0, 12)}...`);
+            await fetchListings();
+            await getUserRTBs(address);
         } catch (error: any) {
-            setMessage(error?.message || "Duyệt giao dịch thất bại");
+            setMessage(error?.message || "Không thể mua listing");
         } finally {
             setLoading(false);
         }
@@ -244,7 +159,7 @@ export default function Marketplace() {
                         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Marketplace</p>
                         <h1 className="mt-3 text-3xl font-semibold text-white">Sàn giao dịch RTB chung cho các ví</h1>
                         <p className="mt-3 text-slate-400">
-                            Khi bạn đăng một RTB lên marketplace, nó sẽ xuất hiện cho mọi ví khác xem. Người mua có thể đặt mua, người bán duyệt giao dịch, và hệ thống giữ 15% hoa hồng.
+                            Khi bạn đăng một RTB lên marketplace, nó sẽ xuất hiện cho mọi ví khác xem. Người mua approve USDC và buyRTB trực tiếp trên blockchain với split 85/15.
                         </p>
 
                         <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-800/70 p-5 text-sm text-slate-300">
@@ -270,42 +185,43 @@ export default function Marketplace() {
                                 </div>
 
                                 <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Token ID</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={tokenId}
-                                    onChange={(e) => setTokenId(Number(e.target.value || 1))}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                                    <span className="mb-2 block">Token ID</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={tokenId}
+                                        onChange={(e) => setTokenId(Number(e.target.value || 1))}
+                                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
+                                    />
+                                </label>
 
-                            <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Match ID</span>
-                                <input
-                                    value={matchId}
-                                    onChange={(e) => setMatchId(e.target.value)}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                                <label className="mt-4 block text-sm text-slate-300">
+                                    <span className="mb-2 block">Match ID</span>
+                                    <input
+                                        value={matchId}
+                                        onChange={(e) => setMatchId(e.target.value)}
+                                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
+                                    />
+                                </label>
 
-                            <label className="mt-4 block text-sm text-slate-300">
-                                <span className="mb-2 block">Giá đề xuất (USDT)</span>
-                                <input
-                                    type="number"
-                                    min="1"
-                                    value={price}
-                                    onChange={(e) => setPrice(Number(e.target.value || 1))}
-                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                />
-                            </label>
+                                <label className="mt-4 block text-sm text-slate-300">
+                                    <span className="mb-2 block">Giá đề xuất (USDC)</span>
+                                    <input
+                                        type="number"
+                                        min="1"
+                                        value={price}
+                                        onChange={(e) => setPrice(Number(e.target.value || 1))}
+                                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
+                                    />
+                                </label>
 
                                 <button
                                     onClick={handleCreateListing}
-                                    className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/20"
+                                    disabled={loading}
+                                    className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/20 disabled:opacity-60"
                                 >
                                     <Sparkles size={18} />
-                                    Đăng lên marketplace
+                                    {loading ? "Đang xử lý..." : "Đăng lên marketplace"}
                                 </button>
                             </div>
                         ) : (
@@ -322,7 +238,7 @@ export default function Marketplace() {
                             <div className="flex items-center justify-between">
                                 <p className="font-semibold text-white">Danh sách marketplace</p>
                                 <span className="rounded-full border border-white/10 px-3 py-1 text-xs uppercase tracking-[0.3em] text-sky-300">
-                                    {listings.filter((item) => item.status === "active").length} đang bán
+                                    {listings.filter((item) => item.status === "ACTIVE").length} đang bán
                                 </span>
                             </div>
                         </div>
@@ -332,57 +248,43 @@ export default function Marketplace() {
                                 Chưa có pack nào trên marketplace.
                             </div>
                         ) : (
-                            listings.map((listing) => (
-                                <div key={listing.id} className="rounded-[24px] border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300">
+                            listings.filter((item) => item.status === "ACTIVE").map((listing) => (
+                                <div key={listing.listingId} className="rounded-[24px] border border-white/10 bg-slate-900/70 p-5 text-sm text-slate-300">
                                     <div className="flex items-start justify-between gap-3">
                                         <div>
-                                            <p className="font-semibold text-white">RTB #{listing.tokenId}</p>
-                                            <p className="mt-1 text-slate-400">{listing.matchId}</p>
+                                            <p className="font-semibold text-white">RTB #{listing.rtbTokenId}</p>
+                                            <p className="mt-1 text-slate-400">Listing #{listing.listingId}</p>
                                         </div>
-                                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${listing.status === "sold" ? "bg-emerald-500/15 text-emerald-300" : listing.status === "pending" ? "bg-amber-500/15 text-amber-300" : "bg-sky-500/15 text-sky-300"}`}>
-                                            {listing.status === "sold" ? "Đã bán" : listing.status === "pending" ? "Chờ duyệt" : "Đang bán"}
-                                        </span>
+                                        <span className="rounded-full bg-sky-500/15 px-3 py-1 text-xs uppercase tracking-[0.2em] text-sky-300">Đang bán</span>
                                     </div>
 
                                     <div className="mt-4 grid gap-2 text-sm">
                                         <div className="flex items-center justify-between">
                                             <span>Giá</span>
-                                            <span className="font-semibold text-white">{listing.price} USDT</span>
+                                            <span className="font-semibold text-white">{listing.price} USDC</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span>Hoa hồng 15%</span>
-                                            <span className="font-semibold text-white">{listing.fee} USDT</span>
+                                            <span className="font-semibold text-white">{(listing.price * 0.15).toFixed(2)} USDC</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span>Người bán nhận</span>
-                                            <span className="font-semibold text-white">{listing.sellerReceives} USDT</span>
+                                            <span className="font-semibold text-white">{(listing.price * 0.85).toFixed(2)} USDC</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span>Người bán</span>
-                                            <span className="max-w-[180px] truncate font-semibold text-white">{listing.sellerAddress.slice(0, 6)}...{listing.sellerAddress.slice(-4)}</span>
+                                            <span className="max-w-[180px] truncate font-semibold text-white">{listing.seller.slice(0, 6)}...{listing.seller.slice(-4)}</span>
                                         </div>
                                     </div>
 
-                                    {listing.status === "active" && (
-                                        <button
-                                            onClick={() => handleBuy(listing)}
-                                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-800 px-4 py-3 font-medium text-slate-100"
-                                        >
-                                            <ArrowRightLeft size={16} />
-                                            Mua pack
-                                        </button>
-                                    )}
-
-                                    {listing.status === "pending" && address?.toLowerCase() === listing.sellerAddress.toLowerCase() && (
-                                        <button
-                                            onClick={() => handleApproveTransfer(listing)}
-                                            disabled={loading}
-                                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 px-4 py-3 font-semibold text-white"
-                                        >
-                                            {loading ? <Sparkles className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                                            Duyệt giao dịch
-                                        </button>
-                                    )}
+                                    <button
+                                        onClick={() => handleBuy(listing)}
+                                        disabled={loading}
+                                        className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-800 px-4 py-3 font-medium text-slate-100 disabled:opacity-60"
+                                    >
+                                        <ArrowRightLeft size={16} />
+                                        Mua RTB
+                                    </button>
                                 </div>
                             ))
                         )}

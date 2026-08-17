@@ -1,0 +1,92 @@
+{
+  "abi": [
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "internalType": "uint256", "name": "listingId", "type": "uint256" },
+        { "indexed": true, "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+        { "indexed": true, "internalType": "address", "name": "seller", "type": "address" },
+        { "indexed": false, "internalType": "uint256", "name": "price", "type": "uint256" }
+      ],
+      "name": "Listed",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "internalType": "uint256", "name": "listingId", "type": "uint256" },
+        { "indexed": true, "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+        { "indexed": true, "internalType": "address", "name": "seller", "type": "address" }
+      ],
+      "name": "Cancelled",
+      "type": "event"
+    },
+    {
+      "anonymous": false,
+      "inputs": [
+        { "indexed": true, "internalType": "uint256", "name": "listingId", "type": "uint256" },
+        { "indexed": true, "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+        { "indexed": true, "internalType": "address", "name": "buyer", "type": "address" },
+        { "indexed": false, "internalType": "address", "name": "seller", "type": "address" },
+        { "indexed": false, "internalType": "uint256", "name": "sellerAmount", "type": "uint256" },
+        { "indexed": false, "internalType": "uint256", "name": "treasuryAmount", "type": "uint256" },
+        { "indexed": false, "internalType": "uint256", "name": "totalPrice", "type": "uint256" }
+      ],
+      "name": "Sold",
+      "type": "event"
+    },
+    {
+      "inputs": [
+        { "internalType": "uint256", "name": "listingId", "type": "uint256" }
+      ],
+      "name": "cancelListing",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        { "internalType": "uint256", "name": "listingId", "type": "uint256" }
+      ],
+      "name": "buyRTB",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        { "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+        { "internalType": "uint256", "name": "price", "type": "uint256" }
+      ],
+      "name": "listRTB",
+      "outputs": [],
+      "stateMutability": "nonpayable",
+      "type": "function"
+    },
+    {
+      "inputs": [],
+      "name": "nextListingId",
+      "outputs": [{ "internalType": "uint256", "name": "", "type": "uint256" }],
+      "stateMutability": "view",
+      "type": "function"
+    },
+    {
+      "inputs": [
+        { "internalType": "uint256", "name": "", "type": "uint256" }
+      ],
+      "name": "listings",
+      "outputs": [
+        { "internalType": "uint256", "name": "listingId", "type": "uint256" },
+        { "internalType": "uint256", "name": "tokenId", "type": "uint256" },
+        { "internalType": "address", "name": "seller", "type": "address" },
+        { "internalType": "address", "name": "buyer", "type": "address" },
+        { "internalType": "uint256", "name": "price", "type": "uint256" },
+        { "internalType": "uint8", "name": "status", "type": "uint8" },
+        { "internalType": "uint256", "name": "createdAt", "type": "uint256" },
+        { "internalType": "uint256", "name": "soldAt", "type": "uint256" }
+      ],
+      "stateMutability": "view",
+      "type": "function"
+    }
+  ]
+}

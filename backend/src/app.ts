@@ -5,6 +5,7 @@ import rtbRoutes from "./routes/rtbRoutes";
 import rttRoutes from "./routes/rttRoutes";
 import paymentRoutes from "./routes/paymentRoutes";
 import matchRoutes from "./routes/matchRoutes";
+import marketplaceRoutes from "./routes/marketplaceRoutes";
 import errorHandler from "./middleware/errorHandler";
 import { startIndexer } from "./services/indexerService";
 
@@ -24,6 +25,9 @@ app.use("/api/rtt", rttRoutes);
 
 // Matches
 app.use("/api/matches", matchRoutes);
+
+// Marketplace
+app.use("/api/marketplace", marketplaceRoutes);
 
 // Start blockchain indexer (non-blocking)
 try {
