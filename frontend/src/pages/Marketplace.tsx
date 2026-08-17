@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRightLeft, CheckCircle2, Sparkles, Wallet, Loader2 } from "lucide-react";
+import { ArrowRightLeft, CheckCircle2, Sparkles, Wallet } from "lucide-react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWallet } from "../hooks/useWallet";
 import { getUserRTBs, transferRTB } from "../services/contract";
@@ -14,15 +14,17 @@ interface MarketplaceListing {
     id: string;
     tokenId: number;
     matchId: string;
+    owner: string;
     sellerAddress: string;
-    buyerAddress?: string | null;
     price: number;
-    status: "active" | "pending" | "sold" | "cancelled";
-    paymentVerifiedAt?: Date | null;
+    fee: number;
+    sellerReceives: number;
+    status: "active" | "pending" | "sold";
+    buyerAddress?: string;
     createdAt: string;
 }
 
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:3000";
+const STORAGE_KEY = "marketplace-listings";
 
 export default function Marketplace() {
     const navigate = useNavigate();
@@ -41,40 +43,22 @@ export default function Marketplace() {
     const [ownedRTBs, setOwnedRTBs] = useState<Array<{ tokenId: number; matchId: string }>>([]);
     const [loading, setLoading] = useState(false);
     const [message, setMessage] = useState("");
-    const [listingsLoading, setListingsLoading] = useState(true);
     const previousWalletRef = useRef<string | null>(null);
     const previousConnectedRef = useRef(false);
     const hasInitializedWalletRef = useRef(false);
 
-    // Load listings from API
     useEffect(() => {
-        async function loadListings() {
-            try {
-                setListingsLoading(true);
-                const response = await fetch(`${API_BASE_URL}/api/marketplace/listings`);
-                if (response.ok) {
-                    const data = await response.json();
-                    setListings(data.listings || []);
-                } else {
-                    console.error("Failed to load listings:", response.statusText);
-                    setListings([]);
-                }
-            } catch (error) {
-                console.error("Error loading listings:", error);
+        try {
+            const raw = localStorage.getItem(STORAGE_KEY);
+            if (raw) {
+                const parsed = JSON.parse(raw) as MarketplaceListing[];
+                setListings(parsed);
+            } else {
                 setListings([]);
-            } finally {
-                setListingsLoading(false);
             }
+        } catch {
+            setListings([]);
         }
-
-        void loadListings();
-        
-        // Refresh listings every 10 seconds
-        const interval = setInterval(() => {
-            void loadListings();
-        }, 10000);
-
-        return () => clearInterval(interval);
     }, []);
 
     useEffect(() => {
@@ -134,16 +118,9 @@ export default function Marketplace() {
         return `RTB #${tokenId} · ${matchId}`;
     }, [tokenId, matchId]);
 
-    async function reloadListings() {
-        try {
-            const response = await fetch(`${API_BASE_URL}/api/marketplace/listings`);
-            if (response.ok) {
-                const data = await response.json();
-                setListings(data.listings || []);
-            }
-        } catch (error) {
-            console.error("Error reloading listings:", error);
-        }
+    function saveListings(nextListings: MarketplaceListing[]) {
+        setListings(nextListings);
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(nextListings));
     }
 
     async function handleCreateListing() {
@@ -164,38 +141,31 @@ export default function Marketplace() {
                 return;
             }
 
-            setLoading(true);
-            setMessage("");
+            const fee = Number((price * 0.15).toFixed(2));
+            const sellerReceives = Number((price - fee).toFixed(2));
 
-            const response = await fetch(`${API_BASE_URL}/api/marketplace/listings`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    sellerAddress: address,
-                    tokenId: Number(tokenId),
-                    matchId: matchId.trim(),
-                    price: Number(price)
-                })
-            });
+            const listing: MarketplaceListing = {
+                id: `${Date.now()}-${tokenId}`,
+                tokenId: Number(tokenId),
+                matchId: matchId.trim(),
+                owner: defaultOwner,
+                sellerAddress: address,
+                price: Number(price),
+                fee,
+                sellerReceives,
+                status: "active",
+                createdAt: new Date().toISOString()
+            };
 
-            if (response.ok) {
-                setMessage(`✅ Đã đăng RTB #${tokenId} lên marketplace với giá ${price} USDC`);
-                setPrice(50);
-                setTokenId(1);
-                setMatchId("MATCH-001");
-                await reloadListings();
-            } else {
-                const error = await response.json();
-                setMessage(error.message || "Không thể đăng listing");
-            }
+            const next = [listing, ...listings];
+            saveListings(next);
+            setMessage(`Đã đăng RTB #${tokenId} lên marketplace với giá ${price} USDT`);
         } catch (error: any) {
             setMessage(error?.message || "Không thể đăng listing");
-        } finally {
-            setLoading(false);
         }
     }
 
-    async function handleBuyAndPay(listing: MarketplaceListing) {
+    async function handleBuy(listing: MarketplaceListing) {
         try {
             if (!connected || !address) {
                 setMessage("Vui lòng kết nối ví trước khi mua pack");
@@ -203,29 +173,19 @@ export default function Marketplace() {
             }
 
             if (address.toLowerCase() === listing.sellerAddress.toLowerCase()) {
-                setMessage("Bạn đang là người bán, không được mua listing của chính mình");
+                setMessage("Bạn đang là người bán, hãy chờ người khác mua hoặc dùng nút duyệt giao dịch");
                 return;
             }
 
-            setLoading(true);
-            setMessage("");
-
-            // Step 1: Buyer needs to pay USDC via Payment page
-            navigate("/payment", {
-                state: {
-                    isMarketplacePurchase: true,
-                    listingId: listing.id,
-                    listingPrice: listing.price,
-                    tokenId: listing.tokenId,
-                    matchId: listing.matchId,
-                    sellerAddress: listing.sellerAddress,
-                    buyerAddress: address
-                }
-            });
+            const next = listings.map((item) =>
+                item.id === listing.id
+                    ? { ...item, status: "pending" as const, buyerAddress: address }
+                    : item
+            );
+            saveListings(next);
+            setMessage(`Yêu cầu mua RTB #${listing.tokenId} đã được gửi. Người bán sẽ duyệt giao dịch.`);
         } catch (error: any) {
             setMessage(error?.message || "Không thể tạo yêu cầu mua");
-        } finally {
-            setLoading(false);
         }
     }
 
@@ -246,40 +206,22 @@ export default function Marketplace() {
                 return;
             }
 
-            if (!listing.paymentVerifiedAt) {
-                setMessage("Thanh toán chưa được xác minh. Vui lòng chờ.");
-                return;
-            }
-
             setLoading(true);
             setMessage("");
-
-            // Sign and transfer RTB
             const txHash = await transferRTB(listing.buyerAddress, listing.tokenId);
-            setMessage(`✅ Giao dịch đã được duyệt. TX: ${txHash.slice(0, 12)}...`);
 
-            // Step: Verify transfer on backend
-            try {
-                const response = await fetch(`${API_BASE_URL}/api/marketplace/confirm-transfer`, {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({
-                        listingId: listing.id,
-                        transferTxHash: txHash
-                    })
-                });
-
-                if (response.ok) {
-                    await reloadListings();
-                    setMessage(`✅ Giao dịch hoàn tất! RTB đã được chuyển thành công.`);
-                } else {
-                    const error = await response.json();
-                    setMessage(`Cảnh báo: Transfer đã ký nhưng Backend verify failed: ${error.message}`);
-                }
-            } catch (error) {
-                console.error("Error confirming transfer:", error);
-                setMessage(`Cảnh báo: Transfer đã ký nhưng xảy ra lỗi khi sync với Backend.`);
-            }
+            const next = listings.map((item) =>
+                item.id === listing.id
+                    ? {
+                        ...item,
+                        status: "sold" as const,
+                        owner: listing.buyerAddress ?? item.owner,
+                        buyerAddress: listing.buyerAddress ?? item.buyerAddress
+                    }
+                    : item
+            );
+            saveListings(next);
+            setMessage(`Giao dịch đã được duyệt. TX: ${txHash.slice(0, 12)}...`);
         } catch (error: any) {
             setMessage(error?.message || "Duyệt giao dịch thất bại");
         } finally {
@@ -302,7 +244,7 @@ export default function Marketplace() {
                         <p className="text-sm font-semibold uppercase tracking-[0.3em] text-sky-300">Marketplace</p>
                         <h1 className="mt-3 text-3xl font-semibold text-white">Sàn giao dịch RTB chung cho các ví</h1>
                         <p className="mt-3 text-slate-400">
-                            Khi bạn đăng một RTB lên marketplace, nó sẽ xuất hiện cho mọi ví khác xem. Người mua thanh toán USDC, người bán duyệt giao dịch, RTB được chuyển.
+                            Khi bạn đăng một RTB lên marketplace, nó sẽ xuất hiện cho mọi ví khác xem. Người mua có thể đặt mua, người bán duyệt giao dịch, và hệ thống giữ 15% hoa hồng.
                         </p>
 
                         <div className="mt-6 rounded-[24px] border border-white/10 bg-slate-800/70 p-5 text-sm text-slate-300">
@@ -347,23 +289,22 @@ export default function Marketplace() {
                                 />
                             </label>
 
-                                <label className="mt-4 block text-sm text-slate-300">
-                                    <span className="mb-2 block">Giá đề xuất (USDC)</span>
-                                    <input
-                                        type="number"
-                                        min="1"
-                                        value={price}
-                                        onChange={(e) => setPrice(Number(e.target.value || 1))}
-                                        className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
-                                    />
-                                </label>
+                            <label className="mt-4 block text-sm text-slate-300">
+                                <span className="mb-2 block">Giá đề xuất (USDT)</span>
+                                <input
+                                    type="number"
+                                    min="1"
+                                    value={price}
+                                    onChange={(e) => setPrice(Number(e.target.value || 1))}
+                                    className="w-full rounded-xl border border-white/10 bg-slate-900/70 px-3 py-3 text-white outline-none"
+                                />
+                            </label>
 
                                 <button
                                     onClick={handleCreateListing}
-                                    disabled={loading}
-                                    className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/20 disabled:opacity-50"
+                                    className="mt-6 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-blue-500 to-cyan-500 px-4 py-3 font-semibold text-white shadow-lg shadow-blue-500/20"
                                 >
-                                    {loading ? <Loader2 size={18} className="animate-spin" /> : <Sparkles size={18} />}
+                                    <Sparkles size={18} />
                                     Đăng lên marketplace
                                 </button>
                             </div>
@@ -386,12 +327,7 @@ export default function Marketplace() {
                             </div>
                         </div>
 
-                        {listingsLoading ? (
-                            <div className="rounded-[24px] border border-white/10 bg-slate-900/70 p-8 text-center text-slate-300">
-                                <Loader2 className="mx-auto animate-spin" size={32} />
-                                <p className="mt-4">Đang tải listings...</p>
-                            </div>
-                        ) : listings.length === 0 ? (
+                        {listings.length === 0 ? (
                             <div className="rounded-[24px] border border-white/10 bg-slate-900/70 p-8 text-center text-slate-300">
                                 Chưa có pack nào trên marketplace.
                             </div>
@@ -403,61 +339,49 @@ export default function Marketplace() {
                                             <p className="font-semibold text-white">RTB #{listing.tokenId}</p>
                                             <p className="mt-1 text-slate-400">{listing.matchId}</p>
                                         </div>
-                                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${
-                                            listing.status === "sold" ? "bg-emerald-500/15 text-emerald-300" :
-                                            listing.status === "pending" ? "bg-amber-500/15 text-amber-300" :
-                                            listing.status === "cancelled" ? "bg-red-500/15 text-red-300" :
-                                            "bg-sky-500/15 text-sky-300"
-                                        }`}>
-                                            {listing.status === "sold" ? "Đã bán" : listing.status === "pending" ? "Chờ duyệt" : listing.status === "cancelled" ? "Đã hủy" : "Đang bán"}
+                                        <span className={`rounded-full px-3 py-1 text-xs uppercase tracking-[0.2em] ${listing.status === "sold" ? "bg-emerald-500/15 text-emerald-300" : listing.status === "pending" ? "bg-amber-500/15 text-amber-300" : "bg-sky-500/15 text-sky-300"}`}>
+                                            {listing.status === "sold" ? "Đã bán" : listing.status === "pending" ? "Chờ duyệt" : "Đang bán"}
                                         </span>
                                     </div>
 
                                     <div className="mt-4 grid gap-2 text-sm">
                                         <div className="flex items-center justify-between">
                                             <span>Giá</span>
-                                            <span className="font-semibold text-white">{listing.price} USDC</span>
+                                            <span className="font-semibold text-white">{listing.price} USDT</span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                            <span>Hoa hồng 15%</span>
+                                            <span className="font-semibold text-white">{listing.fee} USDT</span>
+                                        </div>
+                                        <div className="flex items-center justify-between">
+                                            <span>Người bán nhận</span>
+                                            <span className="font-semibold text-white">{listing.sellerReceives} USDT</span>
                                         </div>
                                         <div className="flex items-center justify-between">
                                             <span>Người bán</span>
                                             <span className="max-w-[180px] truncate font-semibold text-white">{listing.sellerAddress.slice(0, 6)}...{listing.sellerAddress.slice(-4)}</span>
                                         </div>
-                                        {listing.buyerAddress && (
-                                            <div className="flex items-center justify-between">
-                                                <span>Người mua</span>
-                                                <span className="max-w-[180px] truncate font-semibold text-white">{listing.buyerAddress.slice(0, 6)}...{listing.buyerAddress.slice(-4)}</span>
-                                            </div>
-                                        )}
                                     </div>
 
                                     {listing.status === "active" && (
                                         <button
-                                            onClick={() => handleBuyAndPay(listing)}
+                                            onClick={() => handleBuy(listing)}
                                             className="mt-4 flex w-full items-center justify-center gap-2 rounded-full border border-white/10 bg-slate-800 px-4 py-3 font-medium text-slate-100"
                                         >
                                             <ArrowRightLeft size={16} />
-                                            Mua & Thanh toán
+                                            Mua pack
                                         </button>
                                     )}
 
                                     {listing.status === "pending" && address?.toLowerCase() === listing.sellerAddress.toLowerCase() && (
-                                        <div className="mt-4 space-y-2">
-                                            {listing.paymentVerifiedAt ? (
-                                                <>
-                                                    <p className="text-xs text-emerald-300">✅ Thanh toán đã xác minh</p>
-                                                    <button
-                                                        onClick={() => handleApproveTransfer(listing)}
-                                                        disabled={loading}
-                                                        className="flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 px-4 py-3 font-semibold text-white disabled:opacity-50"
-                                                    >
-                                                        {loading ? <Loader2 className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
-                                                        Duyệt & Transfer RTB
-                                                    </button>
-                                                </>
-                                            ) : (
-                                                <p className="text-xs text-amber-300">⏳ Đang chờ xác minh thanh toán...</p>
-                                            )}
-                                        </div>
+                                        <button
+                                            onClick={() => handleApproveTransfer(listing)}
+                                            disabled={loading}
+                                            className="mt-4 flex w-full items-center justify-center gap-2 rounded-full bg-gradient-to-r from-emerald-500 to-cyan-500 px-4 py-3 font-semibold text-white"
+                                        >
+                                            {loading ? <Sparkles className="animate-spin" size={16} /> : <CheckCircle2 size={16} />}
+                                            Duyệt giao dịch
+                                        </button>
                                     )}
                                 </div>
                             ))
